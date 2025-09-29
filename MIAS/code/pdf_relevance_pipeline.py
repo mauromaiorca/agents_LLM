@@ -1,16 +1,19 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
-PDF Relevance & Structured Extraction Pipeline
-- Relevance scoring per-PDF rispetto a un TOPIC (con rationale e termini)
-- Lettura testo robusta (PyMuPDF + OCR opzionale) + (facoltativo) tabelle
-- Estrazione in due passaggi: globale + RAG per campo (riempie i "N/A")
-- Output CSV con colonne di evidenza e campo 'relevance_rationale'
+PDF Relevance & Structured Extraction Pipeline (v2, richieste utente)
+- Relevance scoring 0..100 calibrato dal LLM con rubrica esplicita (niente default a 85)
+- 'relevance' binaria calcolata nel codice in base alla soglia (--threshold)
+- Rimozione dal CSV di: id_studio, id_sito, current, relevance_rationale
+- Rimozione colonne evidence per: CVM_elicitation, metrics, estimate, description
+- Lettura robusta PDF (PyMuPDF + OCR opzionale) + (facoltativo) tabelle
+- Estrazione: globale + RAG per riempire i "N/A"
+- Output CSV in <PDF_DIR>/analysis/ (colonne fisse)
 
 Dipendenze base:
   pip install langchain langchain-openai langchain-community chromadb pymupdf pypdf python-dotenv
 Opzionali (OCR/tabelle):
-  brew install tesseract ghostscript poppler
+  brew install tesseract poppler ghostscript
   pip install pdf2image pytesseract camelot-py pdfplumber
 """
 
@@ -20,18 +23,14 @@ import json
 from pathlib import Path
 from typing import Dict, Any, List, Optional, Tuple
 
-# ---- .env (carica la .env più vicina alla working dir corrente) ----
+# ---- .env ----
 from dotenv import load_dotenv, find_dotenv
 load_dotenv(find_dotenv(usecwd=True))
 
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-
 if not OPENAI_API_KEY:
-    raise RuntimeError(
-        "OPENAI_API_KEY non trovata. Aggiungila in .env (OPENAI_API_KEY=...) "
-        "oppure export nella shell prima di lanciare."
-    )
+    raise RuntimeError("OPENAI_API_KEY non trovata in ambiente/.env")
 
 # --- robust file/text handling
 try:
@@ -53,30 +52,26 @@ except Exception:
 
 import pandas as pd
 
-# FIX: import corretto per splitter
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_community.vectorstores import Chroma
 
-# Embeddings: prova langchain-huggingface, altrimenti community
+# Embeddings: preferisci langchain-huggingface, altrimenti fallback community
 try:
-    from langchain_huggingface import HuggingFaceEmbeddings  # pip install -U langchain-huggingface
+    from langchain_huggingface import HuggingFaceEmbeddings
 except Exception:
-    from langchain_community.embeddings import HuggingFaceEmbeddings  # deprec. warning ok
+    from langchain_community.embeddings import HuggingFaceEmbeddings  # avviso deprecabile accettabile
 
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import SystemMessage, HumanMessage
 
 # ----------------------------
-# Schema colonne (ordine finale)
+# Schema colonne (ordine finale del CSV)
 # ----------------------------
+# Rimossi: id_studio, id_sito, current, relevance_rationale
 SCHEMA_FIELDS = [
     "pdf_filename",
-    "relevance",
-    "relevance_percentage",
-    "relevance_rationale",
-    "id_stima",
-    "id_studio",
-    "id_sito",
+    "relevance",                 # 0/1, deciso dal codice (>= soglia)
+    "relevance_percentage",      # 0..100, deciso dal LLM
     "author",
     "year",
     "title",
@@ -85,8 +80,8 @@ SCHEMA_FIELDS = [
     "spatial coordinates",
     "distance coast",
     "protected area",
-    "number of marin alien species",
-    "marin alien species",
+    "number of marine alien species",
+    "marine alien species",
     "respondent",
     "sample size",
     "type of sample",
@@ -95,7 +90,6 @@ SCHEMA_FIELDS = [
     "single site/multiple site",
     "CVM_elicitation",
     "metrics",
-    "current",
     "year of estimate",
     "u.m. estimate",
     "estimate",
@@ -104,7 +98,7 @@ SCHEMA_FIELDS = [
 ]
 
 # ---------------------------------------------
-# FIELD_QUERIES “eloquenti” e vincolate al tipo
+# FIELD_QUERIES (senza 'current' come richiesto)
 # ---------------------------------------------
 FIELD_QUERIES: Dict[str, str] = {
     "country": (
@@ -142,14 +136,14 @@ FIELD_QUERIES: Dict[str, str] = {
         "- Do not infer from general context.\n"
         "Output: '1' or '0'."
     ),
-    "number of marin alien species": (
+    "number of marine alien species": (
         "Task: number of marine alien (non-indigenous) species the estimate refers to.\n"
         "Rules:\n"
         "- Extract a clear integer count if explicitly reported; if multiple taxa listed, count them.\n"
         "- If ambiguous or not stated, return 'N/A'.\n"
         "Output: integer as string, or 'N/A'."
     ),
-    "marin alien species": (
+    "marine alien species": (
         "Task: list names of the marine alien species involved.\n"
         "Rules:\n"
         "- Use binomial names if given; otherwise the exact names reported.\n"
@@ -208,12 +202,6 @@ FIELD_QUERIES: Dict[str, str] = {
         "- Choose: 'WTP', 'WTA', 'CS', 'N/A'. If multiple, choose the main metric used in conclusions.\n"
         "Output: one token."
     ),
-    "current": (
-        "Task: identify the currency of the estimate.\n"
-        "Rules:\n"
-        "- Prefer ISO code (EUR, USD, GBP...). If symbol unambiguous, map to ISO. If absent, 'N/A'.\n"
-        "Output: ISO or 'N/A'."
-    ),
     "year of estimate": (
         "Task: the year (or base year) of the economic estimate, not necessarily publication year.\n"
         "Rules:\n"
@@ -241,6 +229,9 @@ FIELD_QUERIES: Dict[str, str] = {
     ),
 }
 
+# evidence da escludere nel CSV (richiesta utente)
+EVIDENCE_EXCLUDE = {"CVM_elicitation", "metrics", "estimate", "description"}
+
 # -----------------------
 # Utility: LLM / Embedding
 # -----------------------
@@ -248,7 +239,6 @@ def make_llm():
     return ChatOpenAI(model=OPENAI_MODEL, temperature=0, api_key=OPENAI_API_KEY or None)
 
 def make_embed():
-    # piccolo, veloce, multilingua
     return HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
 
 # ---------------------------
@@ -326,45 +316,58 @@ def build_retriever_from_text(text: str, k: int = 8):
 
 def top_k_snippets_for_query(text: str, query: str, k: int = 8) -> str:
     retriever = build_retriever_from_text(text, k=k)
-    docs = retriever.invoke(query)  # <-- niente warning
+    docs = retriever.invoke(query)  # no deprecation warning
     return "\n\n---\n\n".join(d.page_content[:2000] for d in docs)
 
 # ----------------------
-# Relevance classification
+# Relevance classification (calibrata)
 # ----------------------
 def score_relevance(topic: str, text: str) -> Dict[str, Any]:
+    """
+    Restituisce: {'relevance_percentage': int[0..100], 'rationale': str}
+    Il binario 'relevance' è deciso nel codice (>= soglia).
+    """
     ctx = top_k_snippets_for_query(text, topic, k=10)
     llm = make_llm()
     sys = (
         "You are a careful research assistant. Given a TOPIC and CONTEXT snippets from a PDF, "
-        "assess whether the PDF is relevant to the topic. "
-        "Return only valid JSON with keys: "
-        "relevance (0/1), relevance_percentage (0..100 integer), "
-        "rationale (short string), matched_terms (list of strings)."
+        "rate how relevant the PDF is to the topic on a 0–100 scale using the rubric:\n"
+        " - 90–100: Directly about the topic; multiple strong matches in methods/results/discussion.\n"
+        " - 75–89: Substantially related; at least one section (methods/results) is on-topic.\n"
+        " - 50–74: Partially related; topic appears but tangential/limited or only in background.\n"
+        " - 25–49: Weakly related; brief mention without substantive analysis.\n"
+        " - 0–24: Not related.\n"
+        "Do not default to round numbers; calibrate to the evidence. "
+        "Return ONLY valid JSON with keys: relevance_percentage (integer 0..100), rationale (short string)."
     )
     usr = f"TOPIC:\n{topic}\n\nCONTEXT:\n{ctx[:12000]}"
     msg = llm.invoke([SystemMessage(content=sys), HumanMessage(content=usr)])
     content = getattr(msg, "content", "").strip()
     try:
         m = re.search(r"\{.*\}", content, flags=re.S)
-        return json.loads(m.group(0) if m else content)
+        data = json.loads(m.group(0) if m else content)
+        rp = int(data.get("relevance_percentage", 0))
+        rp = max(0, min(100, rp))
+        rat = (data.get("rationale") or "").strip()
+        return {"relevance_percentage": rp, "rationale": rat}
     except Exception:
-        return {"relevance": 0, "relevance_percentage": 0, "rationale": "parse_error", "matched_terms": []}
+        return {"relevance_percentage": 0, "rationale": "parse_error"}
 
 # --------------------------
 # Estrattori: globale + per campo
 # --------------------------
 def extract_global(title: str, text: str) -> Dict[str, Any]:
     llm = make_llm()
+    # NOTA: rimosso 'current' dalla lista dei campi attesi
     sys = (
         "Extract bibliographic and study fields from the CONTEXT. "
         "If a field is not present, write exactly 'N/A'. "
         "Return a flat JSON object with the following keys: "
         "author (string, '; ' separated), year (YYYY), title, journal, "
         "country, spatial coordinates, distance coast, protected area, "
-        "number of marin alien species, marin alien species, respondent, sample size, "
+        "number of marine alien species, marine alien species, respondent, sample size, "
         "type of sample, survey mode, type of study, single site/multiple site, "
-        "CVM_elicitation, metrics, current, year of estimate, u.m. estimate, estimate, description, note."
+        "CVM_elicitation, metrics, year of estimate, u.m. estimate, estimate, description, note."
     )
     usr = f"KNOWN_TITLE: {title}\n\nCONTEXT:\n{text[:12000]}"
     msg = llm.invoke([SystemMessage(content=sys), HumanMessage(content=usr)])
@@ -373,7 +376,7 @@ def extract_global(title: str, text: str) -> Dict[str, Any]:
         m = re.search(r"\{.*\}", content, flags=re.S)
         return json.loads(m.group(0) if m else content)
     except Exception:
-        out = {k: "N/A" for k in SCHEMA_FIELDS if k not in ("pdf_filename","relevance","relevance_percentage","relevance_rationale")}
+        out = {k: "N/A" for k in SCHEMA_FIELDS if k not in ("pdf_filename","relevance","relevance_percentage")}
         out["title"] = title or "N/A"
         return out
 
@@ -385,10 +388,12 @@ def ask_field(field: str, question: str, retriever, model: Optional[str] = None)
     ctx = "\n\n---\n\n".join(d.page_content[:2000] for d in docs)
     llm = make_llm() if not model else ChatOpenAI(model=model, temperature=0, api_key=OPENAI_API_KEY or None)
     sys = (
-        "Extract the requested field from the CONTEXT. "
-        "Be precise and conservative: do not infer beyond the text. "
-        "If the information is not present, answer exactly 'N/A'. "
-        "Return only valid JSON with keys 'value' and 'evidence' (short quote from context)."
+        "Extract the requested field from the CONTEXT.\n"
+        "Rules:\n"
+        "- Be precise and conservative: do not infer beyond the text.\n"
+        "- If the information is not present, answer exactly 'N/A'.\n"
+        "- Return ONLY valid JSON with keys 'value' and 'evidence'.\n"
+        "- 'evidence' must be a short literal quote from the context (or empty if N/A)."
     )
     usr = f"FIELD: {field}\nINSTRUCTIONS:\n{question}\n\nCONTEXT:\n{ctx[:12000]}"
     msg = llm.invoke([SystemMessage(content=sys), HumanMessage(content=usr)])
@@ -396,10 +401,8 @@ def ask_field(field: str, question: str, retriever, model: Optional[str] = None)
     try:
         m = re.search(r"\{.*\}", content, flags=re.S)
         data = json.loads(m.group(0) if m else content)
-        val = (data.get("value") or "").strip()
+        val = (data.get("value") or "").strip() or "N/A"
         ev = (data.get("evidence") or "").strip()
-        if not val:
-            val = "N/A"
         return {"value": val, "evidence": ev}
     except Exception:
         return {"value": "N/A", "evidence": ""}
@@ -412,7 +415,9 @@ def fill_na_with_rag(base_record: Dict[str, Any], full_text: str) -> Dict[str, A
         if cur in ("", "N/A"):
             res = ask_field(field, prompt, retriever)
             out[field] = res["value"] if res["value"] else "N/A"
-            out[f"{field}__evidence"] = res["evidence"]
+            # salva evidence SOLO se il campo NON è escluso
+            if field not in EVIDENCE_EXCLUDE:
+                out[f"{field}__evidence"] = res["evidence"]
     return out
 
 # --------------------------
@@ -431,21 +436,20 @@ def process_pdf(
     if not text:
         row["relevance"] = 0
         row["relevance_percentage"] = 0
-        row["relevance_rationale"] = "empty_text_or_unreadable"
         row["note"] = "empty_text_or_unreadable"
         return row
 
     rel = score_relevance(topic, text)
-    row["relevance"] = int(rel.get("relevance", 0))
     row["relevance_percentage"] = int(rel.get("relevance_percentage", 0))
-    matched = rel.get("matched_terms") or []
-    rationale = rel.get("rationale", "")
-    row["relevance_rationale"] = (rationale + (" | matched: " + ", ".join(matched) if matched else "")).strip()
-    row["note"] = rationale
+    # relevance binaria calcolata qui (coerente con la soglia scelta a runtime)
+    row["relevance"] = 1 if row["relevance_percentage"] >= int(relevance_threshold) else 0
+    row["note"] = (rel.get("rationale") or "").strip()
 
-    if row["relevance_percentage"] < int(relevance_threshold):
+    # Se sotto soglia, non procedere all'estrazione dettagliata
+    if row["relevance"] == 0:
         return row
 
+    # estrazione globale + riempimento N/A con RAG
     title_guess = _guess_title(text) or pdf_path.stem.replace("_", " ")
     global_data = extract_global(title_guess, text)
 
@@ -455,6 +459,7 @@ def process_pdf(
 
     row = fill_na_with_rag(row, text)
 
+    # normalizzazioni
     row["protected area"] = _norm_binary(row.get("protected area", "N/A"))
     row["single site/multiple site"] = _norm_binary(row.get("single site/multiple site", "N/A"))
     row["CVM_elicitation"] = _norm_binary(row.get("CVM_elicitation", "N/A"))
@@ -470,12 +475,15 @@ def process_directory(
     max_pages: Optional[int] = 12
 ) -> Tuple[int, int]:
     rows: List[Dict[str, Any]] = []
-    evid_cols = [f"{k}__evidence" for k in FIELD_QUERIES.keys()]
+
+    # prepara solo le colonne evidence che NON sono escluse
+    evid_cols = [f"{k}__evidence" for k in FIELD_QUERIES.keys() if k not in EVIDENCE_EXCLUDE]
 
     out_csv.parent.mkdir(parents=True, exist_ok=True)
 
     for p in sorted(pdf_dir.glob("*.pdf")):
         r = process_pdf(p, topic, relevance_threshold=relevance_threshold, max_pages=max_pages)
+        # assicurati che tutte le colonne finali + evidenze siano presenti
         for col in SCHEMA_FIELDS + evid_cols:
             r.setdefault(col, "" if col.endswith("__evidence") else "N/A")
         rows.append(r)
@@ -520,11 +528,11 @@ def _only_number(x: str) -> str:
 
 if __name__ == "__main__":
     import argparse
-    ap = argparse.ArgumentParser(description="PDF relevance & extraction")
+    ap = argparse.ArgumentParser(description="PDF relevance & extraction (v2)")
     ap.add_argument("--pdf-dir", required=True, help="Cartella con PDF")
     ap.add_argument("--out-csv", required=True, help="Output CSV")
     ap.add_argument("--topic", required=True, help="TOPIC di rilevanza")
-    ap.add_argument("--threshold", type=int, default=50, help="Soglia % rilevanza per estrazione dettagliata")
+    ap.add_argument("--threshold", type=int, default=50, help="Soglia % per considerare 'rilevante' (attiva estrazione)")
     ap.add_argument("--max-pages", type=int, default=12, help="Pagine max da leggere per PDF (0=tutte)")
     args = ap.parse_args()
 
