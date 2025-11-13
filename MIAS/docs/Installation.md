@@ -1,86 +1,140 @@
 # Installation
 
-This project is pure Python and runs on **macOS** and **Windows**.
-It relies on PyMuPDF for text extraction, with optional OCR and table extraction.
+This project is pure Python and runs on **macOS** and **Windows**.  
+It relies on **PyMuPDF** for text extraction and **sentence-transformers** for embeddings, with optional OCR and table extraction.
+
+The recommended way to install Python dependencies is via the provided **`requirements.txt`** file.
+
+---
 
 ## 0) Requirements
 
 - **Python 3.11+**
-- Disk space ~200 MB (optional OCR/table tools add more)
-- An LLM provider (OpenAI/DeepSeek) **or** a local LLM via Ollama
+- Disk space ~200–500 MB (models + OCR/table tools)
+- An **OpenAI API key** (current code uses the official `openai` Python client)
 
-> You can install into the **system** environment or a **virtualenv**. Virtualenv is recommended.
+> You can install into the **system** Python or, preferably, into a **virtual environment**.
 
 ---
 
 ## 1) macOS
 
 ### 1.1 Python
-- If you use `pyenv`:
-  ```bash
-  brew install pyenv
-  pyenv install 3.11.9
-  pyenv global 3.11.9
-  ```
-- Verify:
-  ```bash
-  python --version
-  ```
 
-### 1.2 System tools (optional but recommended)
-- **Tesseract** (OCR), **Poppler** (PDF images), **Ghostscript** (some PDFs), **Java** (for Camelot lattice engine):
-  ```bash
-  brew install tesseract poppler ghostscript
-  ```
+If you use `pyenv` (recommended):
 
-### 1.3 Python libraries
-```bash
-pip install --upgrade pip
-pip install langchain langchain-openai langchain-community chromadb pymupdf pypdf python-dotenv
-# optional extras:
-pip install pdf2image pytesseract camelot-py pdfplumber
-# (optional, for cleaner embedding warning)
-pip install -U langchain-huggingface
+```
+brew install pyenv
+pyenv install 3.11.9
+pyenv global 3.11.9
 ```
 
-> On Apple Silicon, if `pytesseract` complains, ensure Homebrew’s Tesseract is on PATH (`which tesseract`).
+Verify:
+
+```
+python --version
+which python
+```
+
+You should see:
+
+```
+Python 3.11.9
+/Users/<you>/.pyenv/versions/3.11.9/bin/python
+```
 
 ---
+
+### 1.2 Create and activate a virtual environment
+
+```
+python -m venv .venv
+source .venv/bin/activate
+```
+
+---
+
+### 1.3 System tools (optional, for OCR/tables)
+
+```
+brew install tesseract poppler ghostscript
+```
+
+---
+
+### 1.4 Python libraries
+
+```
+pip install --upgrade pip
+pip install -r requirements.txt
+```
+
 ---
 
 ## 2) Windows
 
 ### 2.1 Python
-- Install from <https://www.python.org/downloads/> (choose 3.11+ and check “Add Python to PATH”).
 
-### 2.2 System tools (optional)
-- **Tesseract**: install from <https://github.com/UB-Mannheim/tesseract/wiki>.
-- **Poppler**: Windows builds at <https://github.com/oschwartz10612/poppler-windows/releases/>; add `bin` to PATH.
-- **Ghostscript**: <https://ghostscript.com/releases/index.html> (optional).
+Download from:
 
-### 2.3 Python libraries
-```powershell
-py -m pip install --upgrade pip
-py -m pip install langchain langchain-openai langchain-community chromadb pymupdf pypdf python-dotenv
-py -m pip install pdf2image pytesseract camelot-py pdfplumber
-py -m pip install -U langchain-huggingface
+https://www.python.org/downloads/
+
+Ensure “Add Python to PATH” is checked.
+
+---
+
+### 2.2 Virtual environment
+
+```
+py -m venv .venv
+.\.venv\Scriptsctivate
 ```
 
-If `pdf2image` needs Poppler, set the environment variable (example):
-```powershell
+---
+
+### 2.3 Optional system tools
+
+- Tesseract  
+- Poppler  
+- Ghostscript  
+
+For Poppler:
+
+```
 setx POPPLER_PATH "C:\tools\poppler-24.02.0\Library\bin"
+```
+
+---
+
+### 2.4 Python libraries
+
+```
+py -m pip install --upgrade pip
+py -m pip install -r requirements.txt
 ```
 
 ---
 
 ## 3) Environment (.env)
 
-Create a `.env` file in the repo root (or the working directory you run from):
+Create `.env`:
 
 ```
 OPENAI_API_KEY=sk-...
 OPENAI_MODEL=gpt-4o-mini
-# Alternative providers are documented in docs/Models.md
 ```
 
-Both scripts load `.env` automatically.
+---
+
+## 4) Run the pipeline
+
+```
+./run_pdf_relevance_pipeline.py   --pdf-dir /path/to/pdfs   --topic "topic"   --out-csv output.csv   --threshold 60   --max-pages 20
+```
+
+On Windows:
+
+```
+.
+un_pdf_relevance_pipeline.py --pdf-dir "C:\path\to\pdfs" --topic "topic" --out-csv "C:\out.csv"
+```
