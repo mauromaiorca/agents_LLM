@@ -10,8 +10,8 @@ PDF Relevance & Structured Extraction Pipeline (v2, richieste utente)
 - Estrazione: globale + RAG per riempire i "N/A"
 - Output CSV in <PDF_DIR>/analysis/ (colonne fisse)
 
-Dipendenze base:
-  pip install langchain langchain-openai langchain-community chromadb pymupdf pypdf python-dotenv
+Dipendenze base (PATH A, old LangChain):
+  pip install "langchain<0.1.0" chromadb pymupdf pypdf python-dotenv
 Opzionali (OCR/tabelle):
   brew install tesseract poppler ghostscript
   pip install pdf2image pytesseract camelot-py pdfplumber
@@ -27,7 +27,7 @@ from typing import Dict, Any, List, Optional, Tuple
 from dotenv import load_dotenv, find_dotenv
 load_dotenv(find_dotenv(usecwd=True))
 
-OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 if not OPENAI_API_KEY:
     raise RuntimeError("OPENAI_API_KEY non trovata in ambiente/.env")
@@ -52,17 +52,12 @@ except Exception:
 
 import pandas as pd
 
+# ---- LangChain (old-style, PATH A) ----
 from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain_community.vectorstores import Chroma
-
-# Embeddings: preferisci langchain-huggingface, altrimenti fallback community
-try:
-    from langchain_huggingface import HuggingFaceEmbeddings
-except Exception:
-    from langchain_community.embeddings import HuggingFaceEmbeddings  # avviso deprecabile accettabile
-
-from langchain_openai import ChatOpenAI
-from langchain_core.messages import SystemMessage, HumanMessage
+from langchain.vectorstores import Chroma
+from langchain.embeddings import HuggingFaceEmbeddings
+from langchain.chat_models import ChatOpenAI
+from langchain.schema import SystemMessage, HumanMessage
 
 # ----------------------------
 # Schema colonne (ordine finale del CSV)
@@ -236,7 +231,11 @@ EVIDENCE_EXCLUDE = {"CVM_elicitation", "metrics", "estimate", "description"}
 # Utility: LLM / Embedding
 # -----------------------
 def make_llm():
-    return ChatOpenAI(model=OPENAI_MODEL, temperature=0, api_key=OPENAI_API_KEY or None)
+    return ChatOpenAI(
+        model_name=OPENAI_MODEL,
+        temperature=0,
+        openai_api_key=OPENAI_API_KEY,
+    )
 
 def make_embed():
     return HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
@@ -311,12 +310,14 @@ def read_pdf_text(path: Path, max_pages: Optional[int] = None, use_ocr_fallback:
 def build_retriever_from_text(text: str, k: int = 8):
     splitter = RecursiveCharacterTextSplitter(chunk_size=1500, chunk_overlap=150)
     docs = splitter.create_documents([text])
-    vs = Chroma.from_documents(docs, embedding=make_embed())  # in-memory
+    # use positional arg for embedding to avoid API-name differences
+    vs = Chroma.from_documents(docs, make_embed())  # in-memory
     return vs.as_retriever(search_kwargs={"k": k})
 
 def top_k_snippets_for_query(text: str, query: str, k: int = 8) -> str:
     retriever = build_retriever_from_text(text, k=k)
-    docs = retriever.invoke(query)  # no deprecation warning
+    # old-style retriever API
+    docs = retriever.get_relevant_documents(query)
     return "\n\n---\n\n".join(d.page_content[:2000] for d in docs)
 
 # ----------------------
@@ -341,7 +342,7 @@ def score_relevance(topic: str, text: str) -> Dict[str, Any]:
         "Return ONLY valid JSON with keys: relevance_percentage (integer 0..100), rationale (short string)."
     )
     usr = f"TOPIC:\n{topic}\n\nCONTEXT:\n{ctx[:12000]}"
-    msg = llm.invoke([SystemMessage(content=sys), HumanMessage(content=usr)])
+    msg = llm([SystemMessage(content=sys), HumanMessage(content=usr)])
     content = getattr(msg, "content", "").strip()
     try:
         m = re.search(r"\{.*\}", content, flags=re.S)
@@ -370,13 +371,13 @@ def extract_global(title: str, text: str) -> Dict[str, Any]:
         "CVM_elicitation, metrics, year of estimate, u.m. estimate, estimate, description, note."
     )
     usr = f"KNOWN_TITLE: {title}\n\nCONTEXT:\n{text[:12000]}"
-    msg = llm.invoke([SystemMessage(content=sys), HumanMessage(content=usr)])
+    msg = llm([SystemMessage(content=sys), HumanMessage(content=usr)])
     content = getattr(msg, "content", "").strip()
     try:
         m = re.search(r"\{.*\}", content, flags=re.S)
         return json.loads(m.group(0) if m else content)
     except Exception:
-        out = {k: "N/A" for k in SCHEMA_FIELDS if k not in ("pdf_filename","relevance","relevance_percentage")}
+        out = {k: "N/A" for k in SCHEMA_FIELDS if k not in ("pdf_filename", "relevance", "relevance_percentage")}
         out["title"] = title or "N/A"
         return out
 
@@ -384,9 +385,17 @@ def build_field_retriever(text: str):
     return build_retriever_from_text(text, k=6)
 
 def ask_field(field: str, question: str, retriever, model: Optional[str] = None) -> Dict[str, str]:
-    docs = retriever.invoke(question)
+    docs = retriever.get_relevant_documents(question)
     ctx = "\n\n---\n\n".join(d.page_content[:2000] for d in docs)
-    llm = make_llm() if not model else ChatOpenAI(model=model, temperature=0, api_key=OPENAI_API_KEY or None)
+    llm = (
+        make_llm()
+        if not model
+        else ChatOpenAI(
+            model_name=model,
+            temperature=0,
+            openai_api_key=OPENAI_API_KEY,
+        )
+    )
     sys = (
         "Extract the requested field from the CONTEXT.\n"
         "Rules:\n"
@@ -396,7 +405,7 @@ def ask_field(field: str, question: str, retriever, model: Optional[str] = None)
         "- 'evidence' must be a short literal quote from the context (or empty if N/A)."
     )
     usr = f"FIELD: {field}\nINSTRUCTIONS:\n{question}\n\nCONTEXT:\n{ctx[:12000]}"
-    msg = llm.invoke([SystemMessage(content=sys), HumanMessage(content=usr)])
+    msg = llm([SystemMessage(content=sys), HumanMessage(content=usr)])
     content = getattr(msg, "content", "").strip()
     try:
         m = re.search(r"\{.*\}", content, flags=re.S)
@@ -427,7 +436,7 @@ def process_pdf(
     pdf_path: Path,
     topic: str,
     relevance_threshold: int = 50,
-    max_pages: Optional[int] = 12
+    max_pages: Optional[int] = 12,
 ) -> Dict[str, Any]:
     row = {k: "N/A" for k in SCHEMA_FIELDS}
     row["pdf_filename"] = pdf_path.name
@@ -472,7 +481,7 @@ def process_directory(
     topic: str,
     out_csv: Path,
     relevance_threshold: int = 50,
-    max_pages: Optional[int] = 12
+    max_pages: Optional[int] = 12,
 ) -> Tuple[int, int]:
     rows: List[Dict[str, Any]] = []
 
@@ -542,6 +551,6 @@ if __name__ == "__main__":
         args.topic,
         Path(args.out_csv),
         relevance_threshold=args.threshold,
-        max_pages=max_pages
+        max_pages=max_pages,
     )
     print(f"[DONE] Processati: {n_all}, rilevanti ≥ soglia: {n_rel} -> {args.out_csv}")
