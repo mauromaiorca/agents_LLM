@@ -1,4 +1,4 @@
-# Marine Invasive Alien Species (MIAS) PDF Pipeline
+# PDF Summary Agent for MIAS Papers
 
 A small toolkit to **score relevance** and **extract structured fields** from scientific PDFs
 (e.g., *marine invasive alien species* in the Mediterranean) using an LLM + lightweight RAG.
