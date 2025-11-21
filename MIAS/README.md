@@ -51,9 +51,8 @@ And finally run the program:
    ```bash
    ./code/run_pdf_relevance_pipeline.py --pdf-dir /home/mauro/test/testLLM/agents_LLM/MIAS/documents --threshold 60 --max-pages 20
    ```
-this will produce a directory and a file that looks :
+this will produce a directory and a file that looks : [/home/mauro/test/testLLM/agents_LLM/MIAS/documents/analysis/extractions_from_pdfs.csv](analysis/extractions_from_pdfs.csv)
 
-`/home/mauro/test/testLLM/agents_LLM/MIAS/documents/analysis/extractions_from_pdfs.csv`
 
 ### Advanced stuff
 The task to perform for the agents are in the file "marine_valuation.yml". This file is not pefect, and you need to adjust it to what you are interested to. Also, every paper is different, and the algorithm might want to look for specific details in some of the papers.
@@ -65,8 +64,12 @@ to get a better version of the marine_valuation_v2.yml using the collected data 
 
 You can then call again ./code/run_pdf_relevance_pipeline.py and hopefully you will get a better analysis table: analysis_run2.csv
 ```bash
-./code/run_pdf_relevance_pipeline.py --pdf-dir documents --config marine_valuation_v2.yml --actions-csv marine_valuation_v2.csv --out-csv analysis_run2.csv
+./code/run_pdf_relevance_pipeline.py --pdf-dir documents --config marine_valuation_v2.yml --actions-csv marine_valuation_v2.csv --out-csv analysis/analysis_run2.csv
 ```
+
+this will produce a directory and a file that looks : [/home/mauro/test/testLLM/agents_LLM/MIAS/documents/analysis/analysis_run2.csv](analysis/analysis_run2.csv)
+that hopefully has more informative fields.
+
 
 ## Configure & Customise
 
