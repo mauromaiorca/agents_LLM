@@ -147,7 +147,7 @@ def make_llm() -> ChatOpenAI:
 
 
 def make_embed() -> HuggingFaceEmbeddings:
-    return HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
+    return HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2",model_kwargs={"device": "cpu"},encode_kwargs={"device": "cpu"},)
 
 
 # ----------------------------------------------------------------------
@@ -494,6 +494,7 @@ def process_directory(
     Returns:
         (n_all, n_relevant)
     """
+    import time
     schema_fields: List[str] = profile["schema_fields"]
     fields_cfg: Dict[str, Dict[str, Any]] = profile["fields"]
 
@@ -511,8 +512,19 @@ def process_directory(
 
     out_csv.parent.mkdir(parents=True, exist_ok=True)
 
-    for p in sorted(pdf_dir.glob("*.pdf")):
+    pdf_list = sorted(pdf_dir.glob("*.pdf"))
+    n_files = len(pdf_list)
+    if n_files == 0:
+        pd.DataFrame(columns=schema_fields + evid_cols).to_csv(out_csv, index=False)
+        return 0, 0
+
+    print(f"[INFO] Found {n_files} PDF files in {pdf_dir}")
+    start_time = time.perf_counter()
+
+    for idx, p in enumerate(pdf_list, start=1):
+        t0 = time.perf_counter()
         per_file_action = per_file_actions_map.get(p.name)
+
         r = process_pdf(
             pdf_path=p,
             topic=topic,
@@ -521,6 +533,8 @@ def process_directory(
             max_pages=max_pages,
             per_file_action=per_file_action,
         )
+        t1 = time.perf_counter()
+
         # ensure all schema + evidence columns exist
         for col in schema_fields + evid_cols:
             if col.endswith("__evidence"):
@@ -528,6 +542,16 @@ def process_directory(
             else:
                 r.setdefault(col, "N/A")
         rows.append(r)
+
+        # progress + ETA
+        elapsed_total = t1 - start_time
+        avg_per_file = elapsed_total / idx
+        remaining = avg_per_file * (n_files - idx)
+
+        print(
+            f"[PROGRESS] [{idx}/{n_files}] {p.name} done in {t1 - t0:.1f}s | "
+            f"avg {avg_per_file:.1f}s/file | ETA {remaining/60:.1f} min"
+        )
 
     if not rows:
         pd.DataFrame(columns=schema_fields + evid_cols).to_csv(out_csv, index=False)
@@ -540,6 +564,9 @@ def process_directory(
         n_rel = int(df["relevance"].astype(str).astype(float).sum())
     else:
         n_rel = 0
+
+    total_time = time.perf_counter() - start_time
+    print(f"[INFO] Completed processing of {n_files} PDFs in {total_time/60:.1f} min")
 
     return len(df), n_rel
 
