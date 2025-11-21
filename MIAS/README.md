@@ -54,7 +54,7 @@ And finally run the program:
 this will produce a directory and a file that looks : [/home/mauro/test/testLLM/agents_LLM/MIAS/documents/analysis/extractions_from_pdfs.csv](analysis/extractions_from_pdfs.csv)
 
 
-### Advanced stuff
+### Advanced operations
 The task to perform for the agents are in the file "marine_valuation.yml". This file is not pefect, and you need to adjust it to what you are interested to. Also, every paper is different, and the algorithm might want to look for specific details in some of the papers.
 In that case you can run
 ```bash
