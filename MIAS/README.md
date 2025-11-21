@@ -70,14 +70,3 @@ You can then call again ./code/run_pdf_relevance_pipeline.py and hopefully you w
 this will produce a directory and a file that looks : [/home/mauro/test/testLLM/agents_LLM/MIAS/documents/analysis/analysis_run2.csv](analysis/analysis_run2.csv)
 that hopefully has more informative fields.
 
-
-## Configure & Customise
-
-- Adjust fields and prompts in [`docs/Config.md`](docs/Config.md).
-- Switch models/providers (OpenAI, DeepSeek, local) in [`docs/Models.md`](docs/Models.md).
-
-## Detailed Guides
-
-- Usage walkthrough: [`docs/Usage.md`](docs/Usage.md)
-- Advanced options (OCR, tables, speed/cost): [`docs/Advanced.md`](docs/Advanced.md)
-- Troubleshooting: [`docs/Troubleshooting.md`](docs/Troubleshooting.md)
