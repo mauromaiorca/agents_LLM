@@ -58,7 +58,7 @@ this will produce a directory and a file that looks : [/home/mauro/test/testLLM/
 The task to perform for the agents are in the file "marine_valuation.yml". This file is not pefect, and you need to adjust it to what you are interested to. Also, every paper is different, and the algorithm might want to look for specific details in some of the papers.
 In that case you can run
 ```bash
- ./code/profile_refinement_agent.py --csv code/extractions_from_pdfs.csv --instructions analysis_instructions.yml --base-profile code/marine_valuation.yml --o-basename marine_valuation_v2
+ ./code/profile_refinement_agent.py --csv code/extractions_from_pdfs.csv --instructions refinement_instructions.yml --base-profile code/marine_valuation.yml --o-basename marine_valuation_v2
 ```
 to get a better version of the marine_valuation_v2.yml using the collected data and the table. And per-file csv instructions, marine_valuation_v2.csv with specific per-file instructions on the findings.
 
