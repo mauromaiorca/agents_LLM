@@ -21,7 +21,7 @@ You should see three directories (analysis, code, docs, and template_instruction
 You need to have ChatGPT API, unfortunately this might not be free.
 Instructions here: [https://platform.openai.com/](https://platform.openai.com/docs/quickstart)
    
-### setup the ChatGPT API
+## Setup ChatGPT API
 
 In the directory where you are going to use the code, create a file named .env that will look like:
    ```bash
@@ -31,7 +31,7 @@ OPENAI_MODEL=gpt-4o-mini
 and replace "YOUR-API-KEY" with your api key retrieved from OpenAI. Also, it should be possible use other LLM, but I didn't test on that. Further, here the gpt-4o-mini is used because it's cheap, see pricing here: [openAI pricing](https://platform.openai.com/docs/pricing), you can also go for a cheaper gpt-5-nano, or slightly more expensive gpt-5-mini.
 Assume the directory you are using the code is 
 
-### Install
+## Install
 Be sure you are in the "agents_LLM/MIAS" folder (you will run program from here). 
 To don't mess with other installation in your system create an environment, source it, activate, install required software. 
 So, in the directory "agents_LLM/MIAS" do this:
@@ -46,7 +46,7 @@ You should now be ready to use the program "./code/run_pdf_relevance_pipeline.py
 
 If you are using windows or other systems other than linux or mac, you might have a look here [`docs/Installation.md`](docs/Installation.md) for inspiration. However, this specific installation has been tested in linux only.
 
-### Run the program
+## Run the program
 Always be sure that your environment is activated, so go to your home directory (e.g. cd /home/mauro/test/testLLM/agents_LLM/MIAS/), and do 
    ```deactivate
 source .venv/bin/activate
@@ -66,7 +66,7 @@ To run the program:
 this will produce a directory and a file that looks : [/home/mauro/test/testLLM/agents_LLM/MIAS/documents/analysis/extractions_from_pdfs.csv](analysis/extractions_from_pdfs.csv)
 
 
-### Automatically refine the instructions and re-run the program 
+## Automatically refine the instructions and re-run the program 
 The task to perform for the agents are in the file "marine_valuation.yml". This file is not pefect, and you need to adjust it to what you are interested to. Also, every paper is different, and the algorithm might want to look for specific details in some of the papers.
 
 This is a brief schema of the mechanisms:
