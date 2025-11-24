@@ -1,0 +1,143 @@
+profile_name: tickets_2024
+description: >
+  Rimborsi 2024: ricevute e documenti di viaggio (treno, aereo, hotel, auto a noleggio).
+
+topic: >
+  Travel-related receipts and tickets for 2024, including train, airplane, hotel,
+  and rental car expenses that may be reimbursed.
+
+schema_fields:
+  - pdf_filename
+  - relevance
+  - relevance_percentage
+  - date
+  - starting place
+  - destination
+  - price
+  - name of passenger
+  - company name
+
+evidence_exclude: []
+
+relevance:
+  system_prompt: |-
+    You are a careful manager assistant. Given a TOPIC and CONTEXT snippets from a PDF,
+    decide whether the document is a travel receipt related to the TOPIC and classify
+    it into one of the following categories:
+
+      - "train"       : train ticket
+      - "airplane"    : flight ticket
+      - "hotel"       : hotel stay
+      - "rental car"  : car rental expenses
+      - "N/A"         : none of the above, or not a receipt
+
+    First, assign a relevance score on a 0–100 scale:
+
+      - 90–100: clear receipt in one of the categories above.
+      - 50–89 : possibly a receipt or travel document, but incomplete or ambiguous.
+      - 0–49  : not a receipt or clearly off-topic for travel reimbursements.
+
+    Output format:
+    Return ONLY valid JSON with keys:
+      - relevance_percentage : integer 0..100
+      - rationale            : short string (one or two sentences) explaining the score
+                               and naming the chosen category.
+      - category             : one of "train", "airplane", "hotel", "rental car", "N/A"
+
+global_extraction:
+  system_prompt: |-
+    Extract travel and passenger information from the CONTEXT.
+    Do not invent information that is not supported by the text.
+
+    Rules:
+    - If a field is not present or cannot be determined, write exactly "N/A".
+    - If multiple possible values exist (e.g. several passengers), choose the one
+      that clearly corresponds to the main charge in the receipt.
+    - Keep outputs compact and machine-readable.
+
+    Return a flat JSON object with the following keys (all as strings):
+
+      date            : exact date of the travel (NOT booking date), formatted as YYYY.MM.DD
+      starting place  : city or location where the travel starts ("from")
+      destination     : city or location where the travel ends ("to")
+      price           : total price paid for the main trip on the receipt, numeric string (e.g. "123.45")
+      name of passenger : full name of the passenger
+      company name    : name of the travel company (airline, hotel, railway, rental car, etc.)
+
+    If the document is clearly not a travel receipt, return "N/A" for all fields.
+
+fields:
+
+  date:
+    evidence: true
+    question: |-
+      Task: extract the actual travel date.
+
+      Rules:
+      - Prefer the date of the trip (departure, check-in), not the booking date.
+      - If multiple travel dates exist, choose the main one (e.g. departure).
+      - Convert the date into the format: YYYY.MM.DD (year.month.day)
+        Example: 2024-03-15 → 2024.03.15
+      - If the date cannot be determined, return "N/A".
+
+      Output: a single date string in format YYYY.MM.DD or "N/A".
+
+  starting place:
+    evidence: true
+    question: |-
+      Task: extract the city or location where the travel starts ("from").
+
+      Rules:
+      - Use the exact name as printed in the receipt.
+      - If multiple segments exist, choose the first departure point.
+      - If unclear, return "N/A".
+
+      Output: a single string or "N/A".
+
+  destination:
+    evidence: true
+    question: |-
+      Task: extract the city or location where the travel ends ("to").
+
+      Rules:
+      - Use the exact name as printed.
+      - If multiple segments exist, choose the final destination.
+      - If unclear, return "N/A".
+
+      Output: a single string or "N/A".
+
+  price:
+    evidence: true
+    question: |-
+      Task: extract the total price paid for the main trip on the receipt.
+
+      Rules:
+      - Return only the numeric value (no currency), e.g. "123.45".
+      - If multiple prices appear, choose the main total.
+      - Replace commas as thousand separators; use a dot for decimals.
+      - If unclear, return "N/A".
+
+      Output: "123.45" or "N/A".
+
+  name of passenger:
+    evidence: true
+    question: |-
+      Task: extract the full name of the passenger.
+
+      Rules:
+      - Use the exact name printed.
+      - If several names appear, choose the one linked to the ticket.
+      - If not present, return "N/A".
+
+      Output: string or "N/A".
+
+  company name:
+    evidence: true
+    question: |-
+      Task: extract the name of the travel company.
+
+      Rules:
+      - Use the exact company/brand name (e.g. "ITA Airways", "Trenitalia", "Hilton", "Hertz").
+      - If unclear, return "N/A".
+
+      Output: string or "N/A".
