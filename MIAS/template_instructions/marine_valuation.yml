@@ -1,0 +1,367 @@
+profile_name: marine_valuation
+description: >
+  Profile for economic valuation of impacts from marine alien (non-indigenous) species
+  in coastal and marine ecosystems.
+
+topic: >
+  Economic valuation of impacts from marine alien species in coastal marine ecosystems,
+  including studies about costs, damages, willingness to pay, willingness to accept,
+  travel cost models, hedonic pricing, contingent valuation, benefit transfer and
+  related economic valuation approaches.
+
+schema_fields:
+  - pdf_filename
+  - relevance
+  - relevance_percentage
+  - author
+  - year
+  - title
+  - journal
+  - country
+  - spatial coordinates
+  - distance coast
+  - protected area
+  - number of marine alien species
+  - marine alien species
+  - respondent
+  - sample size
+  - type of sample
+  - survey mode
+  - type of study
+  - single site/multiple site
+  - CVM_elicitation
+  - metrics
+  - year of estimate
+  - u.m. estimate
+  - estimate
+  - description
+  - note
+
+# fields for which we do NOT want an "...__evidence" column in the CSV
+evidence_exclude:
+  - CVM_elicitation
+  - metrics
+  - estimate
+  - description
+
+relevance:
+  system_prompt: |-
+    You are a careful research assistant. Given a TOPIC and CONTEXT snippets from a PDF,
+    rate how relevant the PDF is to the topic on a 0–100 scale using the rubric:
+
+      - 90–100: Directly about the topic; multiple strong matches in methods, results, or discussion.
+      - 75–89: Substantially related; at least one section (methods or results) is clearly on-topic.
+      - 50–74: Partially related; the topic appears but is tangential, limited, or only in background/context.
+      - 25–49: Weakly related; only brief or generic mention without substantive analysis.
+      - 0–24: Not related to the topic.
+
+    Rules:
+    - Do not default to round numbers; calibrate carefully to the evidence in the context.
+    - Consider both the scientific content (methods, data, results) and the economic valuation aspects.
+    - When the topic is marine alien species, do NOT treat general biodiversity, general pollution,
+      or generic ecosystem services as strongly related unless alien species and valuation are explicit.
+
+    Output format:
+    Return ONLY valid JSON with keys:
+      - relevance_percentage: integer 0..100
+      - rationale: short string (one or two sentences) explaining the score
+
+global_extraction:
+  system_prompt: |-
+    Extract bibliographic and study fields from the CONTEXT. The documents are primarily about
+    the economic valuation of impacts from marine alien (non-indigenous) species, but you must
+    not assume information that is not in the text.
+
+    Rules:
+    - If a field is not present, write exactly "N/A".
+    - If multiple values exist for a field (e.g. several authors or species), join them with "; ".
+    - Keep outputs compact and machine-readable.
+    - Do not invent coordinates, distances, years, or numeric estimates.
+
+    Return a flat JSON object with the following keys (all as strings):
+
+      author                 : main authors (e.g. "Surname1, Name1; Surname2, Name2")
+      year                   : publication year (YYYY) if available, else "N/A"
+      title                  : article title
+      journal                : journal or outlet name
+      country                : country or countries of the study site(s)
+      spatial coordinates    : coordinates for the site(s)
+      distance coast         : distance from coast, in meters
+      protected area         : "1" if explicitly within a marine protected area, "0" otherwise
+      number of marine alien species : number of alien species in the valuation
+      marine alien species   : list of the alien species involved
+      respondent             : main respondent group (resident, tourist, fisher, etc.)
+      sample size            : sample size of respondents
+      type of sample         : sampling design (random, stratified, convenience, etc.)
+      survey mode            : mode of survey (online, mail, telephone, face to face, mixed)
+      type of study          : economic study type (contingent valuation, choice experiment, costs, etc.)
+      single site/multiple site : "1" if a travel-cost multiple-sites study, "0" otherwise
+      CVM_elicitation        : "1" if CVM used AND elicitation format is stated; "0" otherwise
+      metrics                : welfare metric (WTP, WTA, CS, or N/A)
+      year of estimate       : year/base year of economic estimate (YYYY)
+      u.m. estimate          : unit of measure (e.g. "EUR/person", "EUR/visit")
+      estimate               : central numeric estimate (without unit)
+      description            : 1–2 sentences describing the environmental change valued
+      note                   : any short clarifying note
+
+    If the CONTEXT is clearly off-topic, still do your best to extract generic bibliographic
+    information (author, year, title, journal) and set other fields to "N/A".
+
+fields:
+
+  country:
+    evidence: true
+    question: |-
+      Task: identify the country or countries of the study site(s).
+
+      Rules:
+      - Extract only explicit site countries; do NOT infer from author affiliations or institutional addresses.
+      - If multiple countries are stated, list them separated by "; ".
+      - If only a broad region is given (e.g. "Mediterranean Basin"), output that literal region.
+      - If many countries are clearly involved but not fully listed, return "multicountries".
+      - If no country or region is stated, return "N/A".
+
+      Output: a single line string.
+
+  spatial coordinates:
+    evidence: true
+    question: |-
+      Task: extract geographic coordinates (latitude/longitude) for the study site(s).
+
+      Rules:
+      - Prefer decimal degrees; if values are given in degrees/minutes/seconds (DMS), convert to decimal
+        with 5 decimal places if the exact conversion is possible.
+      - If multiple sites are present, list coordinate pairs as "lat,lon" separated by " | ".
+      - If coordinates appear only in figures without explicit numeric values, return "N/A".
+      - Do NOT invent or approximate coordinates.
+
+      Output example:
+      - "45.43700,12.33300 | 45.51000,12.30000"
+      - or "N/A".
+
+  distance coast:
+    evidence: true
+    question: |-
+      Task: extract the distance from the coast (in meters) if explicitly reported.
+
+      Rules:
+      - If the value is reported in kilometres, convert to meters (e.g. 1.2 km -> 1200).
+      - If a range is given, return the midpoint (arithmetic mean).
+      - If the distance is not explicitly stated, return "N/A".
+      - Do NOT infer from maps or figures without numeric labels.
+
+      Output: numeric string (e.g., "1200") or "N/A".
+
+  protected area:
+    evidence: true
+    question: |-
+      Task: determine whether the main study site is inside a Marine Protected Area (MPA).
+
+      Rules:
+      - Return "1" if the text explicitly states the site is within an MPA, marine reserve,
+        national park, or similar protected designation.
+      - Return "0" if the text states it is not in an MPA, or if there is no information.
+      - Do not infer from general context (for example, do not assume all national parks
+        are MPAs unless stated).
+
+      Output: "1" or "0".
+
+  number of marine alien species:
+    evidence: true
+    question: |-
+      Task: extract the number of marine alien (non-indigenous) species that the economic
+      estimate refers to.
+
+      Rules:
+      - Extract a clear integer count if it is explicitly reported.
+      - If several alien species are listed explicitly, you may count them.
+      - If the number is ambiguous or never clearly stated, return "N/A".
+      - If the valuation is clearly not about alien species, return "N/A".
+
+      Output: integer as string (e.g. "3"), or "N/A".
+
+  marine alien species:
+    evidence: true
+    question: |-
+      Task: list the names of the marine alien species involved in the valuation.
+
+      Rules:
+      - Use binomial scientific names when given; otherwise use the exact names reported.
+      - Separate multiple species with "; ".
+      - If only higher taxa or vague categories (e.g. "invasive algae") are mentioned without
+        specific species names, return "N/A".
+      - If the study clearly has no alien species, return "N/A".
+
+      Output examples:
+      - "Rugulopteryx okamurae; Callinectes sapidus"
+      - or "N/A".
+
+  respondent:
+    evidence: true
+    question: |-
+      Task: identify the main respondent group if there is a survey (e.g. resident, tourist,
+      fisher, bather, sailor, diver, etc.).
+
+      Rules:
+      - If the study does not use a survey of human respondents, return "N/A".
+      - Prefer the exact label used by the authors (lowercase single term or short phrase).
+      - If multiple groups are clearly present, you may list them separated by "; " but be concise.
+
+      Output: one term or short phrase, or "N/A".
+
+  sample size:
+    evidence: true
+    question: |-
+      Task: extract the sample size of respondents.
+
+      Rules:
+      - Return a single integer (as a string).
+      - If there are several waves or sub-samples, return the total sample size if it is reported;
+        otherwise return the main sample size used for the economic estimation.
+      - If the sample size is not reported, return "N/A".
+
+      Output: integer as string (e.g. "428") or "N/A".
+
+  type of sample:
+    evidence: true
+    question: |-
+      Task: identify the sampling design.
+
+      Rules:
+      - Choose one of:
+          "random", "stratified", "cluster", "systematic", "convenience", "snowball", "other", "N/A".
+      - If several designs are combined, pick the primary one used for estimation.
+      - If the design is vague (e.g. "survey of visitors" without further detail), use "convenience"
+        if it appears non-probability; otherwise "N/A".
+
+      Output: one token from the list.
+
+  survey mode:
+    evidence: true
+    question: |-
+      Task: identify the primary survey mode.
+
+      Rules:
+      - Choose one of:
+          "online", "mail", "telephone", "face to face", "mixed", "N/A".
+      - If multiple modes are clearly used, return "mixed".
+      - If there is no human survey, return "N/A".
+
+      Output: one token from the list.
+
+  type of study:
+    evidence: true
+    question: |-
+      Task: classify the type of economic valuation study.
+
+      Rules:
+      - Choose one of:
+          "choice model", "choice experiment", "contingent valuation", "costs", "prices",
+          "hedonic pricing", "travel cost model", "production functions",
+          "benefit transfer", "other", "N/A".
+      - "Choice model" and "choice experiment" can be used interchangeably; prefer
+        "choice experiment" if that term is explicit.
+      - If the study is purely a cost accounting or damage cost calculation, use "costs".
+      - If none of the categories clearly applies, use "other" or "N/A".
+
+      Output: one token from the list.
+
+  single site/multiple site:
+    evidence: true
+    question: |-
+      Task: indicate whether this is a travel-cost multiple-sites study.
+
+      Rules:
+      - Return "1" only if a travel cost model (TCM) with multiple sites is used.
+      - Return "0" for all other cases, including:
+          * single-site TCM
+          * non-TCM valuation methods
+          * unclear cases.
+
+      Output: "1" or "0".
+
+  CVM_elicitation:
+    evidence: false
+    question: |-
+      Task: indicate presence of contingent valuation and elicitation format.
+
+      Rules:
+      - Return "1" if:
+          * contingent valuation (CVM) is used, AND
+          * the elicitation format is clearly stated (single-bounded dichotomous choice,
+            double-bounded, one-and-one-half, payment card, open-ended, etc.).
+      - Return "0" otherwise (including if CVM is not used, or the format is not described).
+
+      Output: "1" or "0".
+
+  metrics:
+    evidence: false
+    question: |-
+      Task: identify the welfare metric reported.
+
+      Rules:
+      - Choose one of:
+          "WTP", "WTA", "CS", "N/A".
+      - "WTP" = willingness to pay; "WTA" = willingness to accept;
+        "CS" = consumer surplus (e.g., from travel cost models).
+      - If multiple metrics are reported, choose the one used in the main conclusions.
+      - If no clear welfare metric is identifiable, return "N/A".
+
+      Output: one token from the list.
+
+  year of estimate:
+    evidence: true
+    question: |-
+      Task: extract the year (or base year) of the economic estimate, which may differ
+      from the publication year.
+
+      Rules:
+      - Look for explicit mention such as "values are expressed in 2015 euros" or
+        "prices were converted to 2010 values".
+      - If a range of years is used, return the midpoint year (rounded to the nearest integer).
+      - If no base year is specified, return "N/A".
+
+      Output: YYYY or "N/A".
+
+  u.m. estimate:
+    evidence: true
+    question: |-
+      Task: extract the unit of measure of the main economic estimate.
+
+      Rules:
+      - Examples:
+          "EUR/person", "EUR/household", "EUR/visit", "EUR/hectare", "EUR/year".
+      - Use singular (e.g. "EUR/person", not "EUR/persons").
+      - If multiple units appear, choose the one corresponding to the central result.
+      - If no clear unit is associated with the main estimate, return "N/A".
+
+      Output: normalized unit string or "N/A".
+
+  estimate:
+    evidence: false
+    question: |-
+      Task: extract the central numeric estimate of economic value.
+
+      Rules:
+      - If several estimates exist, choose the main or central estimate used in the conclusions.
+      - Return only the numeric value (no currency symbol and no unit).
+      - If only a range is given, return the midpoint.
+      - Replace commas as thousand separators, but keep decimal points.
+      - If no estimate is reported, return "N/A".
+
+      Output: numeric string (e.g. "43.5" or "1200") or "N/A".
+
+  description:
+    evidence: false
+    question: |-
+      Task: give a brief description of the environmental change valued.
+
+      Rules:
+      - 1–2 sentences; plain text.
+      - Mention the main driver (e.g. alien macroalgae, invasive crab) and the affected component
+        (e.g. bathing water quality, recreational experience, fisheries).
+      - Do not include citations or equation-like notation.
+      - Do not interpret beyond what is clearly stated.
+
+      Output: 1–2 sentences.
+
