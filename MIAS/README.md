@@ -7,7 +7,7 @@ It supports **OpenAI**, **other API providers** (e.g., DeepSeek), and **local LL
 
 
 
-## Download the file
+## Download the files
 Go to the directory you want to use the program.
 Download the code (is in the code section), or use the command
    ```bash
