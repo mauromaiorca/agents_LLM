@@ -21,8 +21,6 @@ You should see three directories (analysis, code, docs, and template_instruction
 You need to have ChatGPT API, unfortunately this might not be free.
 Instructions here: [https://platform.openai.com/](https://platform.openai.com/docs/quickstart)
    
-## Quick Start
-
 ### setup the ChatGPT API
 
 In the directory where you are going to use the code, create a file named .env that will look like:
