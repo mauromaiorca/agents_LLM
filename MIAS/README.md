@@ -1,8 +1,11 @@
 # Papers Analysis and Optimised Literature Agent (P.A.O.L.A.) v.0.1.0
+<img src="docs/images/logo.png" width="100"> 
 
 A small toolkit to **score relevance** and **extract structured fields** from scientific PDFs
 (e.g., *marine invasive alien species* in the Mediterranean) using an LLM + lightweight RAG.
 It supports **OpenAI**, **other API providers** (e.g., DeepSeek), and **local LLMs** via **Ollama**.
+
+
 
 ## Download the file
 Go to the directory you want to use the program.
@@ -50,11 +53,15 @@ Always be sure that your environment is activated, so go to your home directory 
    ```deactivate
 source .venv/bin/activate
    ```
-So you are ready to run the program.
+So you are ready to run the program. This is a brief schema of the mechanisms:
 
-Then, be sure you have a directory with the pdf you want to check (for example assume the directory for your documents is in /home/mauro/test/testLLM/agents_LLM/MIAS/documents), for this example I used the documents here: [random MIAS papers](https://drive.google.com/drive/folders/1ApNg5qFHohkLq_uXEiH0Ow-na8fnDgzt?usp=sharing)
+<img src="docs/images/schema_general.png" width="500"> 
 
-And finally run the program:
+To run, be sure you have a directory with the pdf you want to check (for example assume the directory for your documents is in /home/mauro/test/testLLM/agents_LLM/MIAS/documents), for this example I used the documents here: [random MIAS papers](https://drive.google.com/drive/folders/1ApNg5qFHohkLq_uXEiH0Ow-na8fnDgzt?usp=sharing), and you also need to have the initial template instructions (template_instructions/marine_valuation.yml), and you will have the results in analysis/result_table.csv
+
+
+
+To run the program:
    ```bash
    ./code/run_pdf_relevance_pipeline.py --pdf-dir /home/mauro/test/testLLM/agents_LLM/MIAS/documents --config template_instructions/marine_valuation.yml --out-csv analysis/result_table.csv
    ```
@@ -63,6 +70,11 @@ this will produce a directory and a file that looks : [/home/mauro/test/testLLM/
 
 ### Advanced operations
 The task to perform for the agents are in the file "marine_valuation.yml". This file is not pefect, and you need to adjust it to what you are interested to. Also, every paper is different, and the algorithm might want to look for specific details in some of the papers.
+
+This is a brief schema of the mechanisms:
+
+<img src="docs/images/schema_refinement.png" width="600"> 
+
 In that case you can run
 ```bash
 ./code/profile_refinement_agent.py --csv code/extractions_from_pdfs.csv --instructions template_instructions/refinement_instructions.yml --base-profile template_instructions/marine_valuation.yml --o-basename analysis/marine_valuation_v2
