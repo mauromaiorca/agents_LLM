@@ -17,7 +17,7 @@ cd agents_LLM/MIAS
 So, you are in your MIAS directory, assume your directory is this: "/home/mauro/test/testLLM/agents_LLM/MIAS"
 You should see three directories (analysis, code, docs, and template_instructions). In code there is the actual program, in analysis is where the results are going to be saved, docs is the guide to use the program (you can find this page there as README.md), and in template_instructions you will find template infos.
 
-## Get Ready
+## Get ChatGPT API
 You need to have ChatGPT API, unfortunately this might not be free.
 Instructions here: [https://platform.openai.com/](https://platform.openai.com/docs/quickstart)
    
