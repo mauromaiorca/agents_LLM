@@ -12,6 +12,7 @@ torchvision==0.24.1
 pandas==2.3.3
 streamlit
 pyyaml
+openai
 
 
 # Optional OCR/table extraction (install only if needed)
