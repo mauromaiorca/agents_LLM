@@ -94,7 +94,7 @@ code/run_pdf_relevance_pipeline.py --png-dir scontrini/ --config template_instru
 ```
 and you will get a csv with the receipts total amount: "analysis/scontrini_new.csv":
 
-<img src="docs/images/receipts.png" width="300"> 
+
 
 
 ## Optional third parts  
