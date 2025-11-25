@@ -33,6 +33,7 @@ relevance:
       set relevance_percentage to 0.
     - If you are unsure, choose an intermediate value (e.g. 40–60).
     - Keep the rationale very short.
+    - Do NOT guess categories based on formatting alone: only use explicit textual evidence.
 
     Output STRICTLY a JSON object with the following keys:
     {
@@ -43,17 +44,27 @@ relevance:
 global_extraction:
   system_prompt: |-
     Extract receipt information from the CONTEXT.
-    Do not infer details that are not explicitly supported by the text.
+    Do not infer, deduce, approximate or guess any value not explicitly visible
+    and identifiable in the text.
 
     The receipt may be written in any language (e.g. Italian, German, English, French).
-    Identify the merchant name, the issuing location, the purchase date, and the total amount.
+    Identify only information that is explicitly stated and unambiguous:
+    merchant name, issuing location, purchase date, and total amount.
 
-    Rules:
-    - If a field is not present or cannot be determined, respond with "N/A".
-    - If multiple candidate values appear, choose the one clearly associated
-      with the main transaction.
-    - Keep outputs concise and strictly machine-readable.
+    STRICT rules:
+    - If a field is partially readable, ambiguous, incomplete, or appears only
+      in a damaged/uncertain portion of the document, respond with "N/A".
+    - If multiple candidate values appear and it is not completely clear which one
+      corresponds to the field, respond with "N/A".
+    - Do NOT infer missing values based on typical POS structures.
+    - Do NOT guess city names from street names or postal codes.
+    - Do NOT reconstruct dates from fragments.
+    - Output only what is explicitly present and fully identifiable.
+
+    Numeric rules:
     - For numeric amounts, use a dot as decimal separator and omit currency symbols.
+    - If a total appears but it is unclear whether it represents the final amount paid,
+      return "N/A".
 
     Return a flat JSON object with the following keys (all as strings):
 
@@ -72,11 +83,13 @@ fields:
       Task: extract the date printed on the receipt corresponding to the purchase event.
 
       Rules:
-      - Use the transaction/purchase date, not internal timestamps or batch print times.
+      - Use the transaction/purchase date only if it is completely visible,
+        explicit, and unambiguous.
+      - Do not infer or guess dates from incomplete strings.
       - Convert to the format YYYY.MM.DD.
-      - If multiple dates appear, select the one associated with the payment
-        or located near the total or payment method.
-      - If the date cannot be determined, return "N/A".
+      - If multiple dates appear and the correct one cannot be determined
+        with certainty, return "N/A".
+      - If the date is not clearly readable, return "N/A".
 
       Output: a string in YYYY.MM.DD format or "N/A".
 
@@ -86,10 +99,11 @@ fields:
       Task: extract the city or locality where the receipt was issued.
 
       Rules:
-      - Use the locality printed in the merchant address.
-      - Exclude street names and postal codes; return only the city or locality name.
-      - If several addresses appear, choose the one clearly linked to the issuing store.
-      - If no location is identifiable, return "N/A".
+      - The locality must be explicitly printed and clearly identifiable.
+      - Ignore street names and postal codes; do not infer the city from them.
+      - If several address-like strings appear and none is clearly marked as
+        the store location, return "N/A".
+      - If the location is not directly stated or is ambiguous, return "N/A".
 
       Output: a single string (e.g. "Hamburg") or "N/A".
 
@@ -99,10 +113,12 @@ fields:
       Task: extract the merchant name from the receipt.
 
       Rules:
-      - Use the exact merchant or brand name as printed (e.g. "LIDL", "Carrefour").
-      - Ignore legal suffixes (e.g. GmbH, S.r.l., S.p.A.) unless part of the printed brand.
-      - If several names appear, choose the one clearly associated with store identity.
-      - If not present, return "N/A".
+      - Use only the exact merchant or brand name as printed.
+      - Do not infer the merchant from logos, layout, or known formats.
+      - If several names appear and the correct one is not completely obvious,
+        return "N/A".
+      - If the merchant name is incomplete, unclear, or partially readable,
+        return "N/A".
 
       Output: a single string or "N/A".
 
@@ -112,11 +128,14 @@ fields:
       Task: extract the final total amount paid.
 
       Rules:
-      - Select the final gross amount, including taxes.
-      - Accept labels such as "SUMME", "TOTAL", "TOTALE", "Gesamt", etc.
-      - Return the numeric value only (e.g. "38.10") using a dot as decimal separator.
-      - If more than one total appears, choose the amount linked to the payment.
-      - If none can be identified, return "N/A".
+      - Use the final gross amount only if it is explicitly labelled and
+        unambiguously identifiable.
+      - Accept labels such as "SUMME", "TOTAL", "TOTALE", "Gesamt", etc.,
+        only when clearly linked to the amount.
+      - If multiple totals appear and it is unclear which represents the final
+        payment, return "N/A".
+      - Return only the numeric value (e.g. "38.10") with a dot as decimal separator.
+      - If the amount is damaged, cut, unreadable, or uncertain, return "N/A".
 
       Output: a numeric string like "38.10" or "N/A".
 
