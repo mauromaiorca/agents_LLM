@@ -1,0 +1,122 @@
+profile_name: receipts
+description: >
+  Rimborsi e registrazione di scontrini e ricevute fiscali da negozi,
+  supermercati, ristoranti, farmacie e altri esercizi commerciali.
+
+topic: >
+  Store receipts (in any language), including supermarket, shop, restaurant,
+  pharmacy and other point-of-sale payments.
+
+schema_fields:
+  - pdf_filename
+  - relevance
+  - relevance_percentage
+  - date
+  - place
+  - merchant
+  - total
+
+evidence_exclude: []
+
+relevance:
+  system_prompt: |-
+    You are a relevance classifier for POS receipts.
+
+    Decide whether the given document is a point-of-sale receipt
+    (e.g. supermarket, shop, restaurant, pharmacy, fuel station), in any
+    language.
+
+    Rules:
+    - If the text clearly corresponds to a POS receipt, set relevance_percentage
+      to 100.
+    - If the text clearly is NOT a POS receipt (e.g. email, letter, article),
+      set relevance_percentage to 0.
+    - If you are unsure, choose an intermediate value (e.g. 40–60).
+    - Keep the rationale very short.
+
+    Output STRICTLY a JSON object with the following keys:
+    {
+      "relevance_percentage": <integer 0-100>,
+      "rationale": "<short explanation>"
+    }
+
+global_extraction:
+  system_prompt: |-
+    Extract receipt information from the CONTEXT.
+    Do not infer details that are not explicitly supported by the text.
+
+    The receipt may be written in any language (e.g. Italian, German, English, French).
+    Identify the merchant name, the issuing location, the purchase date, and the total amount.
+
+    Rules:
+    - If a field is not present or cannot be determined, respond with "N/A".
+    - If multiple candidate values appear, choose the one clearly associated
+      with the main transaction.
+    - Keep outputs concise and strictly machine-readable.
+    - For numeric amounts, use a dot as decimal separator and omit currency symbols.
+
+    Return a flat JSON object with the following keys (all as strings):
+
+      date     : purchase date printed on the receipt, formatted as YYYY.MM.DD
+      place    : city or locality where the receipt was issued
+      merchant : merchant name exactly as printed (e.g. "LIDL", "Coop")
+      total    : final amount paid, numeric string (e.g. "38.10")
+
+    If the document is clearly not a POS receipt, return "N/A" for all fields.
+
+fields:
+
+  date:
+    evidence: true
+    question: |-
+      Task: extract the date printed on the receipt corresponding to the purchase event.
+
+      Rules:
+      - Use the transaction/purchase date, not internal timestamps or batch print times.
+      - Convert to the format YYYY.MM.DD.
+      - If multiple dates appear, select the one associated with the payment
+        or located near the total or payment method.
+      - If the date cannot be determined, return "N/A".
+
+      Output: a string in YYYY.MM.DD format or "N/A".
+
+  place:
+    evidence: true
+    question: |-
+      Task: extract the city or locality where the receipt was issued.
+
+      Rules:
+      - Use the locality printed in the merchant address.
+      - Exclude street names and postal codes; return only the city or locality name.
+      - If several addresses appear, choose the one clearly linked to the issuing store.
+      - If no location is identifiable, return "N/A".
+
+      Output: a single string (e.g. "Hamburg") or "N/A".
+
+  merchant:
+    evidence: true
+    question: |-
+      Task: extract the merchant name from the receipt.
+
+      Rules:
+      - Use the exact merchant or brand name as printed (e.g. "LIDL", "Carrefour").
+      - Ignore legal suffixes (e.g. GmbH, S.r.l., S.p.A.) unless part of the printed brand.
+      - If several names appear, choose the one clearly associated with store identity.
+      - If not present, return "N/A".
+
+      Output: a single string or "N/A".
+
+  total:
+    evidence: true
+    question: |-
+      Task: extract the final total amount paid.
+
+      Rules:
+      - Select the final gross amount, including taxes.
+      - Accept labels such as "SUMME", "TOTAL", "TOTALE", "Gesamt", etc.
+      - Return the numeric value only (e.g. "38.10") using a dot as decimal separator.
+      - If more than one total appears, choose the amount linked to the payment.
+      - If none can be identified, return "N/A".
+
+      Output: a numeric string like "38.10" or "N/A".
+
