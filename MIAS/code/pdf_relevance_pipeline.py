@@ -25,6 +25,9 @@ from typing import Dict, Any, List, Optional, Tuple
 
 import yaml
 
+import requests
+import xml.etree.ElementTree as ET
+
 # ---- .env ----
 from dotenv import load_dotenv, find_dotenv
 
@@ -153,6 +156,147 @@ def make_embed() -> HuggingFaceEmbeddings:
 # ----------------------------------------------------------------------
 # PDF reading: text + OCR + tables
 # ----------------------------------------------------------------------
+def extract_figure_captions_from_pdftext(
+    path: Path,
+    max_pages: Optional[int] = None,
+) -> List[Dict[str, str]]:
+    """
+    Heuristic extraction of figure captions directly from the PDF text layout,
+    independent of GROBID.
+
+    Strategy (simple but effective for many scientific PDFs):
+      - use PyMuPDF to get text blocks per page;
+      - within each block, look for lines that start with 'Fig.' or 'Figure';
+      - treat the entire line as a caption.
+
+    Returns a list of dicts:
+      { 'page': int, 'label': 'Fig. 1', 'caption': 'Fig. 1. ...' }
+    """
+    if not fitz:
+        return []
+
+    captions: List[Dict[str, str]] = []
+    try:
+        with fitz.open(str(path)) as doc:
+            n_pages = len(doc)
+            if max_pages is not None:
+                n_pages = min(n_pages, max_pages)
+
+            for page_index in range(n_pages):
+                page = doc.load_page(page_index)
+                # blocks: (x0, y0, x1, y1, "text", block_no, block_type, ...)
+                blocks = page.get_text("blocks")
+                for b in blocks:
+                    if len(b) < 5:
+                        continue
+                    text_block = b[4] or ""
+                    if not text_block.strip():
+                        continue
+                    for line in text_block.splitlines():
+                        line_strip = line.strip()
+                        # match "Fig. 1", "Fig 1", "Figure 1", "Figure 1.", etc.
+                        if re.match(r"^(Fig\.?|Figure)\s+\d+", line_strip, flags=re.IGNORECASE):
+                            # label = "Fig. 1", caption = full line
+                            m = re.match(r"^((Fig\.?|Figure)\s+\d+)", line_strip, flags=re.IGNORECASE)
+                            label = m.group(1) if m else "Figure"
+                            captions.append(
+                                {
+                                    "page": page_index + 1,
+                                    "label": label.strip(),
+                                    "caption": line_strip,
+                                }
+                            )
+    except Exception as e:
+        print(f"[WARN] extract_figure_captions_from_pdftext failed for {path.name}: {e}")
+
+    return captions
+
+def extract_figure_images_and_ocr(
+    path: Path,
+    out_dir: Optional[Path] = None,
+    max_pages: Optional[int] = None,
+) -> List[Dict[str, Any]]:
+    """
+    Extract raster images from the PDF (likely including figures) and optionally run OCR
+    on each image using Tesseract, if available.
+
+    Returns a list of dicts with:
+      {
+        'page': int,
+        'image_index': int,
+        'file_path': str or '',
+        'ocr_text': str,
+      }
+
+    If out_dir is not None, each image is also saved to disk.
+    """
+    results: List[Dict[str, Any]] = []
+    if not fitz:
+        return results
+
+    # Tesseract may or may not be available
+    ocr_available = pytesseract is not None
+    pil_available = False
+    try:
+        from PIL import Image  # type: ignore
+        pil_available = True
+    except Exception:
+        pil_available = False
+
+    if out_dir is not None:
+        out_dir.mkdir(parents=True, exist_ok=True)
+
+    try:
+        import io
+
+        with fitz.open(str(path)) as doc:
+            n_pages = len(doc)
+            if max_pages is not None:
+                n_pages = min(n_pages, max_pages)
+
+            for page_index in range(n_pages):
+                page = doc.load_page(page_index)
+                image_list = page.get_images(full=True)
+                for img_index, img in enumerate(image_list):
+                    xref = img[0]
+                    base_image = doc.extract_image(xref)
+                    image_bytes = base_image.get("image", None)
+                    ext = base_image.get("ext", "png")
+                    file_path_str = ""
+
+                    # Save image to disk if requested
+                    if out_dir is not None and image_bytes:
+                        file_name = f"{path.stem}_p{page_index+1}_img{img_index+1}.{ext}"
+                        file_path = out_dir / file_name
+                        with open(file_path, "wb") as f:
+                            f.write(image_bytes)
+                        file_path_str = str(file_path)
+
+                    # OCR
+                    ocr_text = ""
+                    if ocr_available and pil_available and image_bytes:
+                        try:
+                            from PIL import Image  # type: ignore
+
+                            img_pil = Image.open(io.BytesIO(image_bytes))
+                            ocr_text = pytesseract.image_to_string(img_pil)
+                        except Exception:
+                            ocr_text = ""
+
+                    results.append(
+                        {
+                            "page": page_index + 1,
+                            "image_index": img_index + 1,
+                            "file_path": file_path_str,
+                            "ocr_text": ocr_text.strip(),
+                        }
+                    )
+    except Exception as e:
+        print(f"[WARN] extract_figure_images_and_ocr failed for {path.name}: {e}")
+
+    return results
+
+
 def _pymupdf_text(path: Path, max_pages: Optional[int]) -> str:
     if not fitz:
         return ""
@@ -221,6 +365,646 @@ def read_pdf_text(
         if tb:
             text = f"{text}\n\n{tb}"
     return text.strip()
+
+def _grobid_fulltext_tei(pdf_path: Path, grobid_url: Optional[str] = None) -> str:
+    """
+    Chiama GROBID (processFulltextDocument) e restituisce il TEI XML come stringa.
+    Se qualcosa va storto, ritorna stringa vuota.
+    """
+    base_url = grobid_url or os.getenv("GROBID_URL", "http://localhost:8070")
+    endpoint = base_url.rstrip("/") + "/api/processFulltextDocument"
+
+    try:
+        with pdf_path.open("rb") as f:
+            files = {"input": (pdf_path.name, f, "application/pdf")}
+            resp = requests.post(endpoint, files=files, timeout=120)
+        resp.raise_for_status()
+        return resp.text or ""
+    except Exception as e:
+        print(f"[WARN] GROBID request failed for {pdf_path.name}: {e}")
+        return ""
+
+
+def _strip_ns(tag: str) -> str:
+    """
+    Remove XML namespace from a tag name, e.g. '{http://www.tei-c.org/ns/1.0}TEI' -> 'TEI'.
+    """
+    if not isinstance(tag, str):
+        return ""
+    if "}" in tag:
+        return tag.split("}", 1)[1]
+    return tag
+
+
+def parse_tei_full(tei_xml: str) -> Dict[str, Any]:
+    """
+    Parse the TEI XML returned by GROBID and extract as much structured information
+    as reasonably possible:
+
+      - title
+      - authors (with name, email, orcid, affiliation refs)
+      - affiliations (id + organisation + address/country text)
+      - abstract
+      - sections (id, type, n, title, text)
+      - figures (from <figure> and <div type='figure'>: label + caption)
+      - tables  (from <table> and <figure type='table'> / <div type='table'>)
+      - references (biblStruct → authors, title, journal, year, DOI, raw text)
+      - fulltext: a single plain-text string concatenating all above.
+
+    This is still a best-effort parse: TEI is rich and heterogeneous, but the goal
+    is to keep *all* relevant textual information in a structured way.
+    """
+    out: Dict[str, Any] = {
+        "title": "",
+        "authors": [],
+        "affiliations": [],
+        "abstract": "",
+        "sections": [],
+        "figures": [],
+        "tables": [],
+        "references": [],
+        "fulltext": "",
+    }
+
+    if not tei_xml.strip():
+        return out
+
+    try:
+        root = ET.fromstring(tei_xml)
+    except Exception:
+        # If TEI is malformed, keep everything as raw text
+        out["fulltext"] = tei_xml.strip()
+        return out
+
+    # ------------------------------
+    # HEADER: title, authors, affiliations
+    # ------------------------------
+    tei_header = None
+    for elem in root:
+        if _strip_ns(elem.tag) == "teiHeader":
+            tei_header = elem
+            break
+
+    title = ""
+    authors: List[Dict[str, Any]] = []
+    affiliations: Dict[str, Dict[str, Any]] = {}
+
+    if tei_header is not None:
+        # fileDesc → titleStmt, sourceDesc, etc.
+        file_desc = None
+        for el in tei_header.iter():
+            if _strip_ns(el.tag) == "fileDesc":
+                file_desc = el
+                break
+
+        if file_desc is not None:
+            # title: first <title> inside <titleStmt>
+            for title_stmt in file_desc.iter():
+                if _strip_ns(title_stmt.tag) == "titleStmt":
+                    for t in title_stmt.iter():
+                        if _strip_ns(t.tag) == "title":
+                            title = " ".join(t.itertext()).strip()
+                            break
+                    break
+
+            # collect affiliations with xml:id (if present) so we can link them
+            for aff in file_desc.iter():
+                if _strip_ns(aff.tag) == "affiliation":
+                    aff_id = aff.get("{http://www.w3.org/XML/1998/namespace}id") or aff.get("xml:id") or ""
+                    aff_text = " ".join(t.strip() for t in aff.itertext()).strip()
+                    # try to extract organisation and country separately
+                    org_names = []
+                    country = ""
+                    for ch in aff.iter():
+                        ch_tag = _strip_ns(ch.tag)
+                        if ch_tag == "orgName":
+                            org_names.append(" ".join(ch.itertext()).strip())
+                        elif ch_tag == "country":
+                            country = " ".join(ch.itertext()).strip()
+                    affiliation_rec = {
+                        "id": aff_id,
+                        "text": aff_text,
+                        "org_names": org_names,
+                        "country": country,
+                    }
+                    if aff_id:
+                        affiliations[aff_id] = affiliation_rec
+                    else:
+                        # fallback: synthetic id
+                        synthetic_id = f"aff_{len(affiliations)+1}"
+                        affiliation_rec["id"] = synthetic_id
+                        affiliations[synthetic_id] = affiliation_rec
+
+            # authors
+            for auth in file_desc.iter():
+                if _strip_ns(auth.tag) == "author":
+                    a: Dict[str, Any] = {
+                        "full_name": "",
+                        "forenames": [],
+                        "surnames": [],
+                        "email": "",
+                        "orcid": "",
+                        "aff_refs": [],
+                    }
+                    # persName with forename/surname
+                    pers = None
+                    for ch in auth:
+                        if _strip_ns(ch.tag) == "persName":
+                            pers = ch
+                            break
+                    if pers is not None:
+                        for ch in pers:
+                            tag = _strip_ns(ch.tag)
+                            if tag in ("forename", "given"):
+                                txt = " ".join(ch.itertext()).strip()
+                                if txt:
+                                    a["forenames"].append(txt)
+                            elif tag in ("surname", "family"):
+                                txt = " ".join(ch.itertext()).strip()
+                                if txt:
+                                    a["surnames"].append(txt)
+
+                    # email, orcid, affiliation refs
+                    for ch in auth.iter():
+                        tag = _strip_ns(ch.tag)
+                        if tag == "email":
+                            a["email"] = " ".join(ch.itertext()).strip() or a["email"]
+                        elif tag in ("idno", "id", "idno-type-orcid"):
+                            # GROBID sometimes annotates ORCID as <idno type="ORCID">
+                            if ch.get("type", "").lower() == "orcid":
+                                a["orcid"] = " ".join(ch.itertext()).strip() or a["orcid"]
+                        elif tag == "affiliation":
+                            # could be a reference via @ref="#aff1" or inline text
+                            ref = ch.get("ref") or ""
+                            ref = ref.lstrip("#")
+                            if ref:
+                                if ref not in a["aff_refs"]:
+                                    a["aff_refs"].append(ref)
+
+                    # full name fallback
+                    if a["forenames"] or a["surnames"]:
+                        a["full_name"] = " ".join(a["forenames"] + a["surnames"]).strip()
+                    else:
+                        # if no structured name, use all text
+                        a["full_name"] = " ".join(auth.itertext()).strip()
+
+                    authors.append(a)
+
+    out["title"] = title
+    out["authors"] = authors
+    out["affiliations"] = list(affiliations.values())
+
+    # ------------------------------
+    # ABSTRACT
+    # ------------------------------
+    abstracts: List[str] = []
+    for abs_el in root.iter():
+        if _strip_ns(abs_el.tag) == "abstract":
+            txt = " ".join(t.strip() for t in abs_el.itertext())
+            if txt:
+                abstracts.append(txt)
+    out["abstract"] = "\n\n".join(abstracts).strip()
+
+    # ------------------------------
+    # BODY: sections (div/head + text, with type/n)
+    # ------------------------------
+    sections = []
+    for div in root.iter():
+        if _strip_ns(div.tag) == "div":
+            div_type = div.get("type", "") or ""
+            div_n = div.get("n", "") or ""
+
+            # section title: any <head> child
+            heads = []
+            for h in div:
+                if _strip_ns(h.tag) == "head":
+                    ht = " ".join(h.itertext()).strip()
+                    if ht:
+                        heads.append(ht)
+            sec_title = " / ".join(heads)
+
+            # section text: all text inside div (including nested <p>, etc.)
+            sec_text = " ".join(t.strip() for t in div.itertext()).strip()
+            if sec_text:
+                sections.append(
+                    {
+                        "id": div.get("{http://www.w3.org/XML/1998/namespace}id")
+                        or div.get("xml:id")
+                        or "",
+                        "type": div_type,
+                        "n": div_n,
+                        "title": sec_title,
+                        "text": sec_text,
+                    }
+                )
+
+    out["sections"] = sections
+
+    # ------------------------------
+    # FIGURES: from <figure> and <div type='figure'>
+    # ------------------------------
+    figures: List[Dict[str, Any]] = []
+
+    # (a) explicit <figure> elements
+    for fig in root.iter():
+        if _strip_ns(fig.tag) in ("figure", "fig"):
+            label = fig.get("n", "") or fig.get("xml:id") or ""
+            caption = ""
+            for child in fig.iter():
+                if _strip_ns(child.tag) in ("figDesc", "head", "caption"):
+                    caption = " ".join(child.itertext()).strip()
+                    if caption:
+                        break
+            if not caption:
+                caption = " ".join(t.strip() for t in fig.itertext()).strip()
+            figures.append(
+                {
+                    "id": fig.get("{http://www.w3.org/XML/1998/namespace}id")
+                    or fig.get("xml:id")
+                    or "",
+                    "label": label,
+                    "caption": caption,
+                }
+            )
+
+    # (b) <div type="figure"> used as figure containers
+    for div in root.iter():
+        if _strip_ns(div.tag) == "div" and div.get("type", "").lower() == "figure":
+            label = div.get("n", "") or div.get("xml:id") or ""
+            caption = ""
+            # often <head> inside this div is the caption
+            for child in div.iter():
+                if _strip_ns(child.tag) in ("head", "figDesc", "caption"):
+                    caption = " ".join(child.itertext()).strip()
+                    if caption:
+                        break
+            if not caption:
+                caption = " ".join(t.strip() for t in div.itertext()).strip()
+            figures.append(
+                {
+                    "id": div.get("{http://www.w3.org/XML/1998/namespace}id")
+                    or div.get("xml:id")
+                    or "",
+                    "label": label,
+                    "caption": caption,
+                }
+            )
+
+    out["figures"] = figures
+
+    # ------------------------------
+    # TABLES: <table>, <figure type='table'>, <div type='table'>
+    # ------------------------------
+    tables: List[Dict[str, Any]] = []
+
+    for tbl in root.iter():
+        tag = _strip_ns(tbl.tag)
+        if tag == "table" or (tag == "figure" and tbl.get("type", "").lower() == "table"):
+            label = tbl.get("n", "") or tbl.get("xml:id") or ""
+            caption = ""
+            for child in tbl.iter():
+                if _strip_ns(child.tag) in ("head", "figDesc", "caption"):
+                    caption = " ".join(child.itertext()).strip()
+                    if caption:
+                        break
+            if not caption:
+                caption = " ".join(t.strip() for t in tbl.itertext()).strip()
+            tables.append(
+                {
+                    "id": tbl.get("{http://www.w3.org/XML/1998/namespace}id")
+                    or tbl.get("xml:id")
+                    or "",
+                    "label": label,
+                    "caption": caption,
+                }
+            )
+
+    for div in root.iter():
+        if _strip_ns(div.tag) == "div" and div.get("type", "").lower() == "table":
+            label = div.get("n", "") or div.get("xml:id") or ""
+            caption = ""
+            for child in div.iter():
+                if _strip_ns(child.tag) in ("head", "figDesc", "caption"):
+                    caption = " ".join(child.itertext()).strip()
+                    if caption:
+                        break
+            if not caption:
+                caption = " ".join(t.strip() for t in div.itertext()).strip()
+            tables.append(
+                {
+                    "id": div.get("{http://www.w3.org/XML/1998/namespace}id")
+                    or div.get("xml:id")
+                    or "",
+                    "label": label,
+                    "caption": caption,
+                }
+            )
+
+    out["tables"] = tables
+
+    # ------------------------------
+    # REFERENCES (bibliography): biblStruct / bibl
+    # ------------------------------
+    references: List[Dict[str, Any]] = []
+
+    for bibl in root.iter():
+        tag = _strip_ns(bibl.tag)
+        if tag not in ("biblStruct", "bibl"):
+            continue
+
+        ref_id = bibl.get("{http://www.w3.org/XML/1998/namespace}id") or bibl.get("xml:id") or ""
+        ref_txt = " ".join(t.strip() for t in bibl.itertext()).strip()
+
+        # try to parse some structure
+        ref_authors: List[str] = []
+        ref_title = ""
+        ref_journal = ""
+        ref_year = ""
+        ref_doi = ""
+
+        # titles can be nested: analytic/monogr/imprint
+        for el in bibl.iter():
+            el_tag = _strip_ns(el.tag)
+            if el_tag == "author":
+                a_txt = " ".join(el.itertext()).strip()
+                if a_txt:
+                    ref_authors.append(a_txt)
+            elif el_tag == "title":
+                # use the first title as main title, others as fallbacks
+                if not ref_title:
+                    ref_title = " ".join(el.itertext()).strip()
+            elif el_tag in ("journal", "titleLevel"):
+                if not ref_journal:
+                    ref_journal = " ".join(el.itertext()).strip()
+            elif el_tag == "date":
+                if el.get("when"):
+                    ref_year = el.get("when")[:4]
+            elif el_tag == "idno":
+                if el.get("type", "").lower() == "doi":
+                    ref_doi = " ".join(el.itertext()).strip()
+
+        references.append(
+            {
+                "id": ref_id,
+                "authors": ref_authors,
+                "title": ref_title,
+                "journal": ref_journal,
+                "year": ref_year,
+                "doi": ref_doi,
+                "text": ref_txt,
+            }
+        )
+
+    out["references"] = references
+
+    # ------------------------------
+    # FULLTEXT: concatenate everything in a structured way
+    # ------------------------------
+    parts: List[str] = []
+
+    if out["title"]:
+        parts.append("=== TITLE ===\n" + out["title"])
+
+    if out["authors"]:
+        parts.append(
+            "=== AUTHORS ===\n"
+            + "\n".join(a["full_name"] or " ".join(a["forenames"] + a["surnames"]) for a in out["authors"])
+        )
+
+    if out["affiliations"]:
+        parts.append(
+            "=== AFFILIATIONS ===\n"
+            + "\n\n".join(
+                f"[{aff.get('id','')}] {aff.get('text','')}" for aff in out["affiliations"]
+            )
+        )
+
+    if out["abstract"]:
+        parts.append("=== ABSTRACT ===\n" + out["abstract"])
+
+    if out["sections"]:
+        sec_blocks = []
+        for i, sec in enumerate(out["sections"], start=1):
+            title_prefix = sec["title"].strip() or sec["type"] or f"Section {i}"
+            sec_blocks.append(f"=== SECTION: {title_prefix} ===\n{sec['text']}")
+        parts.append("\n\n".join(sec_blocks))
+
+    if out["figures"]:
+        fig_blocks = []
+        for fig in out["figures"]:
+            label = fig["label"] or fig["id"] or "Figure"
+            fig_blocks.append(f"{label}: {fig['caption']}".strip())
+        parts.append("=== FIGURES (captions from TEI) ===\n" + "\n\n".join(fig_blocks))
+
+    if out["tables"]:
+        tbl_blocks = []
+        for tbl in out["tables"]:
+            label = tbl["label"] or tbl["id"] or "Table"
+            tbl_blocks.append(f"{label}: {tbl['caption']}".strip())
+        parts.append("=== TABLES (captions from TEI) ===\n" + "\n\n".join(tbl_blocks))
+
+    if out["references"]:
+        ref_blocks = []
+        for ref in out["references"]:
+            ref_blocks.append(ref["text"])
+        parts.append("=== REFERENCES ===\n" + "\n\n".join(ref_blocks))
+
+    fulltext = "\n\n".join(parts).strip()
+    if not fulltext:
+        fulltext = " ".join(t.strip() for t in root.itertext()).strip()
+
+    out["fulltext"] = fulltext
+    return out
+
+
+def _tei_to_plain_text(tei_xml: str) -> str:
+    """
+    Convert TEI XML returned by GROBID into plain text, using parse_tei_full.
+
+    This keeps *all* main textual information:
+      - title, authors, affiliations
+      - abstract
+      - body sections
+      - figure captions (from figure/div type='figure')
+      - table captions (from table/figure type='table'/div type='table')
+      - references
+
+    If parsing fails, fall back to raw TEI text.
+    """
+    parsed = parse_tei_full(tei_xml)
+    fulltext = parsed.get("fulltext", "").strip()
+    if fulltext:
+        return fulltext
+    return tei_xml.strip()
+
+
+def read_pdf_text_grobid(
+    path: Path,
+    grobid_url: Optional[str] = None,
+    max_pages: Optional[int] = None,
+    with_tables: bool = True,
+    include_layout_figures: bool = True,
+    include_figure_ocr: bool = False,
+    figure_ocr_dir: Optional[Path] = None,
+) -> str:
+    """
+    Usa GROBID per ottenere il TEI e lo converte in testo piano tramite parse_tei_full.
+    Opzionalmente:
+      - aggiunge le tabelle estratte con Camelot (with_tables=True),
+      - aggiunge didascalie di figura estratte dal layout PDF
+        (include_layout_figures=True),
+      - aggiunge testo OCR delle immagini delle figure
+        (include_figure_ocr=True, salvando le immagini in figure_ocr_dir se fornito).
+    """
+    tei = _grobid_fulltext_tei(path, grobid_url=grobid_url)
+    if not tei:
+        return ""
+
+    text = _tei_to_plain_text(tei)
+
+    # Tabelle come prima
+    if with_tables:
+        tb = _tables_text(path, max_pages)
+        if tb:
+            text = f"{text}\n\n{tb}"
+
+    # Figure captions dal layout PDF
+    if include_layout_figures:
+        captions = extract_figure_captions_from_pdftext(path, max_pages=max_pages)
+        if captions:
+            lines = []
+            for cap in captions:
+                label = cap["label"] or "Figure"
+                lines.append(
+                    f"{label} (page {cap['page']}): {cap['caption']}"
+                )
+            text = (
+                f"{text}\n\n=== FIGURES (captions from PDF layout) ===\n"
+                + "\n\n".join(lines)
+            )
+
+    # OCR sulle immagini delle figure
+    if include_figure_ocr:
+        ocr_dir = figure_ocr_dir
+        if ocr_dir is not None and not isinstance(ocr_dir, Path):
+            ocr_dir = Path(ocr_dir)
+        ocr_results = extract_figure_images_and_ocr(
+            path, out_dir=ocr_dir, max_pages=max_pages
+        )
+        if ocr_results:
+            lines = []
+            for res in ocr_results:
+                if not res["ocr_text"]:
+                    continue
+                lines.append(
+                    f"[page {res['page']} image {res['image_index']}] OCR:\n{res['ocr_text']}"
+                )
+            if lines:
+                text = (
+                    f"{text}\n\n=== FIGURES (OCR from images) ===\n"
+                    + "\n\n".join(lines)
+                )
+
+    return text.strip()
+
+
+
+def grobid_extract_all(
+    pdf_path: Path,
+    grobid_url: Optional[str] = None,
+    max_pages: Optional[int] = None,
+    with_tables: bool = True,
+) -> Dict[str, Any]:
+    """
+    Full structured extraction for a single PDF using GROBID + Camelot.
+
+    Returns a dict with:
+      - 'title'
+      - 'authors'
+      - 'affiliations'
+      - 'abstract'
+      - 'sections'
+      - 'figures'
+      - 'tables'        (captions from TEI)
+      - 'references'
+      - 'fulltext'
+      - 'raw_tei'
+      - 'tables_csv'    (list of CSV strings for tables from Camelot, if any)
+    """
+    tei = _grobid_fulltext_tei(pdf_path, grobid_url=grobid_url)
+    if not tei:
+        return {}
+
+    parsed = parse_tei_full(tei)
+    parsed["raw_tei"] = tei
+
+    # Optional: attach Camelot CSV tables as well
+    tables_csv: List[str] = []
+    if with_tables:
+        tb_block = _tables_text(pdf_path, max_pages)
+        if tb_block:
+            tables_csv.append(tb_block)
+    parsed["tables_csv"] = tables_csv
+
+    return parsed
+
+
+
+
+def text_convert_directory(
+    pdf_dir: Path,
+    out_dir: Path,
+    docs_type: str = "generic",
+    grobid_url: Optional[str] = None,
+    max_pages: Optional[int] = None,
+    use_ocr_fallback: bool = True,
+    with_tables: bool = True,
+) -> None:
+    """
+    Converte tutti i PDF in `pdf_dir` in file di testo semplice.
+    Usa:
+        - read_pdf_text_grobid  se docs_type == "paper"
+        - read_pdf_text         se docs_type == "generic"
+    """
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    pdf_list = sorted(pdf_dir.glob("*.pdf"))
+    if not pdf_list:
+        print(f"[INFO] Nessun PDF trovato in {pdf_dir}")
+        return
+
+    print(f"[INFO] Conversione testo ({docs_type}) per {len(pdf_list)} PDF in {pdf_dir}")
+
+    for p in pdf_list:
+        print(f"[TEXT-CONVERT] Converto {p.name} ...")
+
+        if docs_type == "paper":
+            text = read_pdf_text_grobid(
+                path=p,
+                grobid_url=grobid_url,
+                max_pages=max_pages,
+                with_tables=with_tables,
+            )
+            if not text:
+                print(f"[WARN] GROBID returned empty text for {p.name}, falling back to generic.")
+                text = read_pdf_text(
+                    path=p,
+                    max_pages=max_pages,
+                    use_ocr_fallback=use_ocr_fallback,
+                    with_tables=with_tables,
+                )
+        else:
+            text = read_pdf_text(
+                path=p,
+                max_pages=max_pages,
+                use_ocr_fallback=use_ocr_fallback,
+                with_tables=with_tables,
+            )
+
+        out_path = out_dir / (p.stem + ".txt")
+        out_path.write_text(text, encoding="utf-8")
+        print(f"[TEXT-CONVERT] Salvato in {out_path}")
+
 
 
 # ----------------------------------------------------------------------
@@ -384,13 +1168,36 @@ def process_pdf(
     relevance_threshold: int = 50,
     max_pages: Optional[int] = 12,
     per_file_action: Optional[Dict[str, Any]] = None,
+    docs_type: str = "generic",
+    grobid_url: Optional[str] = None,
 ) -> Dict[str, Any]:
     schema_fields: List[str] = profile["schema_fields"]
 
     row: Dict[str, Any] = {k: "N/A" for k in schema_fields}
     row["pdf_filename"] = pdf_path.name
 
-    text = read_pdf_text(pdf_path, max_pages=max_pages, use_ocr_fallback=True, with_tables=True)
+    # Se docs_type == "paper", prova prima GROBID, poi fallback alla lettura generica
+    if docs_type == "paper":
+        text = read_pdf_text_grobid(pdf_path, grobid_url=grobid_url, max_pages=max_pages, with_tables=True)
+        if not text:
+            print(f"[WARN] GROBID returned empty text for {pdf_path.name}, falling back to generic extractor.")
+            text = read_pdf_text(
+                pdf_path,
+                max_pages=max_pages,
+                use_ocr_fallback=True,
+                with_tables=True,
+                include_layout_figures=True,
+                include_figure_ocr=True,
+                figure_ocr_dir=True,
+            )
+    else:
+        # comportamento originale ("generic")
+        text = read_pdf_text(
+            pdf_path,
+            max_pages=max_pages,
+            use_ocr_fallback=True,
+            with_tables=True,
+        )
     if not text:
         row["relevance"] = 0
         row["relevance_percentage"] = 0
@@ -482,7 +1289,10 @@ def process_directory(
     relevance_threshold: int = 50,
     max_pages: Optional[int] = 12,
     actions_csv: Optional[Path] = None,
+    docs_type: str = "generic",
+    grobid_url: Optional[str] = None,
 ) -> Tuple[int, int]:
+
     """
     Process all PDFs in `pdf_dir` and write a CSV with fixed schema and
     optional evidence columns defined by the profile.
@@ -532,6 +1342,8 @@ def process_directory(
             relevance_threshold=relevance_threshold,
             max_pages=max_pages,
             per_file_action=per_file_action,
+            docs_type=docs_type,
+            grobid_url=grobid_url,
         )
         t1 = time.perf_counter()
 
