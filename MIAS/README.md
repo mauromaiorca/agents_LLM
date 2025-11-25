@@ -87,3 +87,6 @@ You can then call again ./code/run_pdf_relevance_pipeline.py and hopefully you w
 this will produce a directory and a file that looks : [/home/mauro/test/testLLM/agents_LLM/MIAS/documents/analysis/analysis_run2.csv](analysis/analysis_run2.csv)
 that hopefully has more informative fields.
 
+## Optional third parts  
+
+The above software converts a pdf into a text file before submitting it to LLM for analysis. However, this might not be the best way to handle scientific documents that are often complex and hetereogeneous. For this reason, we can offer the interface with grobbid (https://github.com/kermitt2/grobid), a machine learning library for extracting, parsing and re-structuring raw documents such as PDF into structured XML/TEI encoded documents with a particular focus on technical and scientific publications. To use that option (--docs-type paper), you need to locally install grobbid following instructions here: (https://github.com/kermitt2/grobid). One idea is to install docker, and then run "docker run --rm -it -p 8070:8070 lfoppiano/grobid:0.7.3"
