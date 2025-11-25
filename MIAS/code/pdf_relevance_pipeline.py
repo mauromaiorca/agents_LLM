@@ -211,6 +211,50 @@ def extract_figure_captions_from_pdftext(
 
     return captions
 
+
+def read_png_ocr(path: Path) -> str:
+    """
+    OCR di un file immagine usando Tesseract.
+    Versione pulita: nessun output di debug salvo errori critici.
+    """
+    if pytesseract is None:
+        print(f"[ERROR] pytesseract is not available. Cannot OCR {path.name}")
+        return ""
+
+    try:
+        from PIL import Image, ImageOps, ImageFilter
+    except Exception as e:
+        print(f"[ERROR] PIL (Pillow) is not available: {e}")
+        return ""
+
+    try:
+        img = Image.open(path).convert("L")
+
+        # Preprocessing leggero
+        img = img.filter(ImageFilter.MedianFilter(size=3))
+        img = ImageOps.autocontrast(img)
+
+        # Upsample se piccola
+        w, h = img.size
+        if max(w, h) < 1200:
+            scale = 1200.0 / max(w, h)
+            img = img.resize((int(w * scale), int(h * scale)), Image.LANCZOS)
+
+        try:
+            txt = pytesseract.image_to_string(img)
+        except Exception as e:
+            print(f"[ERROR] Tesseract error on {path.name}: {e}")
+            return ""
+
+        return txt.strip()
+
+    except Exception as e:
+        print(f"[ERROR] Unexpected OCR exception for {path.name}: {e}")
+        return ""
+
+
+
+
 def extract_figure_images_and_ocr(
     path: Path,
     out_dir: Optional[Path] = None,
@@ -950,7 +994,6 @@ def grobid_extract_all(
 
 
 
-
 def text_convert_directory(
     pdf_dir: Path,
     out_dir: Path,
@@ -961,24 +1004,40 @@ def text_convert_directory(
     with_tables: bool = True,
 ) -> None:
     """
-    Converte tutti i PDF in `pdf_dir` in file di testo semplice.
-    Usa:
-        - read_pdf_text_grobid  se docs_type == "paper"
-        - read_pdf_text         se docs_type == "generic"
+    Convert documents in pdf_dir to plain text and save them into out_dir.
+
+    - docs_type="generic"  -> PDF via PyMuPDF + optional OCR fallback + tables
+    - docs_type="paper"    -> PDF via GROBID (fulltext TEI) + optional tables
+    - docs_type="receipts" -> image files (png/jpg/jpeg/tif/tiff/bmp) via Tesseract OCR
+
+    In all cases, a .txt file is written to out_dir, and a debug preview of the
+    extracted text is printed to stdout so you can inspect the conversion.
     """
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    pdf_list = sorted(pdf_dir.glob("*.pdf"))
-    if not pdf_list:
-        print(f"[INFO] Nessun PDF trovato in {pdf_dir}")
+    # Select files based on docs_type
+    if docs_type == "receipts":
+        patterns = ["*.png", "*.jpg", "*.jpeg", "*.tif", "*.tiff", "*.bmp"]
+        file_list: List[Path] = []
+        for pat in patterns:
+            file_list.extend(sorted(pdf_dir.glob(pat)))
+    else:
+        file_list = sorted(pdf_dir.glob("*.pdf"))
+
+    if not file_list:
+        print(f"[INFO] No files found in {pdf_dir} for docs_type={docs_type}")
         return
 
-    print(f"[INFO] Conversione testo ({docs_type}) per {len(pdf_list)} PDF in {pdf_dir}")
+    print(f"[INFO] Conversion ({docs_type}) for {len(file_list)} files in {pdf_dir}")
 
-    for p in pdf_list:
-        print(f"[TEXT-CONVERT] Converto {p.name} ...")
+    for p in file_list:
+        print(f"[TEXT-CONVERT] Converting {p.name} ...")
 
-        if docs_type == "paper":
+        # --- choose conversion strategy ---
+        if docs_type == "receipts":
+            text = read_png_ocr(p)
+
+        elif docs_type == "paper":
             text = read_pdf_text_grobid(
                 path=p,
                 grobid_url=grobid_url,
@@ -986,14 +1045,15 @@ def text_convert_directory(
                 with_tables=with_tables,
             )
             if not text:
-                print(f"[WARN] GROBID returned empty text for {p.name}, falling back to generic.")
+                print(f"[WARN] GROBID failed or returned empty for {p.name}, falling back to generic PDF text.")
                 text = read_pdf_text(
                     path=p,
                     max_pages=max_pages,
                     use_ocr_fallback=use_ocr_fallback,
                     with_tables=with_tables,
                 )
-        else:
+
+        else:  # docs_type == "generic"
             text = read_pdf_text(
                 path=p,
                 max_pages=max_pages,
@@ -1001,9 +1061,29 @@ def text_convert_directory(
                 with_tables=with_tables,
             )
 
+        # --- handle empty text ---
+        if not text or not text.strip():
+            print(f"[WARN] Empty text after conversion for {p.name}")
+            text = ""
+
+        # --- debug preview to stdout ---
+        # For receipts the text is usually short; for long PDFs we truncate.
+        if text:
+            if len(text) <= 1000:
+                preview = text
+            else:
+                preview = text[:1000] + "\n...[TRUNCATED PREVIEW]..."
+        else:
+            preview = "<EMPTY TEXT>"
+
+        print(f"[TEXT-CONVERT-DEBUG] ---- BEGIN TEXT {p.name} ----")
+        print(preview)
+        print(f"[TEXT-CONVERT-DEBUG] ---- END TEXT {p.name} ----")
+
+        # --- write to disk ---
         out_path = out_dir / (p.stem + ".txt")
         out_path.write_text(text, encoding="utf-8")
-        print(f"[TEXT-CONVERT] Salvato in {out_path}")
+        print(f"[TEXT-CONVERT] Saved to: {out_path}")
 
 
 
@@ -1171,33 +1251,47 @@ def process_pdf(
     docs_type: str = "generic",
     grobid_url: Optional[str] = None,
 ) -> Dict[str, Any]:
-    schema_fields: List[str] = profile["schema_fields"]
 
+    schema_fields: List[str] = profile["schema_fields"]
     row: Dict[str, Any] = {k: "N/A" for k in schema_fields}
     row["pdf_filename"] = pdf_path.name
 
-    # Se docs_type == "paper", prova prima GROBID, poi fallback alla lettura generica
-    if docs_type == "paper":
-        text = read_pdf_text_grobid(pdf_path, grobid_url=grobid_url, max_pages=max_pages, with_tables=True)
-        if not text:
-            print(f"[WARN] GROBID returned empty text for {pdf_path.name}, falling back to generic extractor.")
+    # --- NUOVA MODALITÀ RECEIPTS ---
+    if docs_type == "receipts":
+        text = read_png_ocr(pdf_path)
+
+        if not text.strip():
+            row["relevance"] = 0
+            row["relevance_percentage"] = 0
+            row["note"] = "empty_or_unreadable_receipt"
+            return row
+
+        # relevance, extraction e RAG rimangono identici
+    else:
+        # comportamento originale
+        if docs_type == "paper":
+            text = read_pdf_text_grobid(
+                pdf_path,
+                grobid_url=grobid_url,
+                max_pages=max_pages,
+                with_tables=True,
+            )
+            if not text:
+                print(f"[WARN] GROBID empty for {pdf_path.name}, fallback generic.")
+                text = read_pdf_text(
+                    pdf_path,
+                    max_pages=max_pages,
+                    use_ocr_fallback=True,
+                    with_tables=True,
+                )
+        else:
             text = read_pdf_text(
                 pdf_path,
                 max_pages=max_pages,
                 use_ocr_fallback=True,
                 with_tables=True,
-                include_layout_figures=True,
-                include_figure_ocr=True,
-                figure_ocr_dir=True,
             )
-    else:
-        # comportamento originale ("generic")
-        text = read_pdf_text(
-            pdf_path,
-            max_pages=max_pages,
-            use_ocr_fallback=True,
-            with_tables=True,
-        )
+
     if not text:
         row["relevance"] = 0
         row["relevance_percentage"] = 0
@@ -1294,8 +1388,12 @@ def process_directory(
 ) -> Tuple[int, int]:
 
     """
-    Process all PDFs in `pdf_dir` and write a CSV with fixed schema and
+    Process all documents in `pdf_dir` and write a CSV with fixed schema and
     optional evidence columns defined by the profile.
+
+    For docs_type:
+      - "generic" / "paper": process PDFs
+      - "receipts": process image files (png/jpg/jpeg/tif/tiff/bmp)
 
     Optionally, use a per-file actions CSV (from the refinement agent) to:
       - override relevance decisions for specific files (e.g. suspected false negatives);
@@ -1322,13 +1420,25 @@ def process_directory(
 
     out_csv.parent.mkdir(parents=True, exist_ok=True)
 
-    pdf_list = sorted(pdf_dir.glob("*.pdf"))
+    # Se receipts, cerca immagini; altrimenti PDF
+    if docs_type == "receipts":
+        patterns = ["*.png", "*.jpg", "*.jpeg", "*.tif", "*.tiff", "*.bmp"]
+        pdf_list: List[Path] = []
+        for pat in patterns:
+            pdf_list.extend(sorted(pdf_dir.glob(pat)))
+    else:
+        pdf_list = sorted(pdf_dir.glob("*.pdf"))
+
     n_files = len(pdf_list)
     if n_files == 0:
         pd.DataFrame(columns=schema_fields + evid_cols).to_csv(out_csv, index=False)
         return 0, 0
 
-    print(f"[INFO] Found {n_files} PDF files in {pdf_dir}")
+    if docs_type == "receipts":
+        print(f"[INFO] Found {n_files} image files in {pdf_dir}")
+    else:
+        print(f"[INFO] Found {n_files} PDF files in {pdf_dir}")
+
     start_time = time.perf_counter()
 
     for idx, p in enumerate(pdf_list, start=1):
@@ -1378,9 +1488,10 @@ def process_directory(
         n_rel = 0
 
     total_time = time.perf_counter() - start_time
-    print(f"[INFO] Completed processing of {n_files} PDFs in {total_time/60:.1f} min")
+    print(f"[INFO] Completed processing of {n_files} files in {total_time/60:.1f} min")
 
     return len(df), n_rel
+
 
 
 # ----------------------------------------------------------------------

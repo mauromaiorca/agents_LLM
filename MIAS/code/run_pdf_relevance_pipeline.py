@@ -25,7 +25,7 @@ def main() -> None:
     ap = argparse.ArgumentParser(description="PDF relevance & extraction (profile-based)")
     ap.add_argument(
         "--pdf-dir",
-        required=True,
+        default=None,
         help="Directory containing PDF files",
     )
     ap.add_argument(
@@ -70,11 +70,18 @@ def main() -> None:
     )
     ap.add_argument(
         "--docs-type",
-        choices=["generic", "paper"],
+        choices=["generic", "paper", "receipts"],
         default="generic",
         help=(
             "Type of documents to process: 'generic' uses the built-in PDF text extractor; "
             "'paper' uses a GROBID server to parse scholarly articles."
+        ),
+    )
+    ap.add_argument(
+        "--png-dir",
+        default=None,
+        help=(
+            "Directory contenente PNG da processare (usata quando --docs-type receipts)."
         ),
     )
     ap.add_argument(
@@ -89,9 +96,23 @@ def main() -> None:
 
     args = ap.parse_args()
 
-    pdf_dir = Path(args.pdf_dir)
-    if not pdf_dir.is_dir():
-        raise SystemExit(f"[ERROR] PDF directory does not exist or is not a directory: {pdf_dir}")
+    # --- Manage PDF or PNG input depending on docs_type ---
+    if args.docs_type == "receipts":
+        # PNG mode
+        if args.png_dir is None:
+            raise SystemExit("[ERROR] --docs-type receipts richiede anche --png-dir PNGDIR")
+        png_dir = Path(args.png_dir)
+        if not png_dir.is_dir():
+            raise SystemExit(f"[ERROR] PNG directory does not exist or is not a directory: {png_dir}")
+        pdf_dir = None
+    else:
+        # PDF mode
+        if args.pdf_dir is None:
+            raise SystemExit("[ERROR] --pdf-dir è richiesto per docs-type generic o paper")
+        pdf_dir = Path(args.pdf_dir)
+        if not pdf_dir.is_dir():
+            raise SystemExit(f"[ERROR] PDF directory does not exist or is not a directory: {pdf_dir}")
+
 
     config_path = Path(args.config)
     if not config_path.is_file():
@@ -121,6 +142,28 @@ def main() -> None:
     # Modalità solo conversione testo per debug
     if args.text_convert is not None:
         debug_dir = Path(args.text_convert)
+
+
+        # Caso receipts → usa PNG invece che PDF
+        if args.docs_type == "receipts":
+            png_dir = Path(args.png_dir)
+            if not png_dir.is_dir():
+                raise SystemExit(f"[ERROR] PNG directory not found: {png_dir}")
+
+            print(f"[INFO] text-convert + receipts, OCR su PNG in {png_dir}")
+            text_convert_directory(
+                pdf_dir=png_dir,
+                out_dir=debug_dir,
+                docs_type="receipts",
+                grobid_url=None,
+                max_pages=None,
+                use_ocr_fallback=True,
+                with_tables=False,
+            )
+            print(f"[DONE] Receipts OCR only. TXT written to: {debug_dir}")
+            return
+
+
         
         grobid_url = None
         if args.docs_type == "paper":
@@ -145,15 +188,39 @@ def main() -> None:
         grobid_url = args.grobid_url or os.getenv("GROBID_URL") or "http://localhost:8070"
         print(f"[INFO] docs-type=paper, using GROBID at: {grobid_url}")
 
-    n_all, n_rel = process_directory(
-        pdf_dir=pdf_dir,
-        topic=topic,
-        out_csv=out_csv,
-        profile=profile,
-        relevance_threshold=args.threshold,
-        max_pages=max_pages,
-        actions_csv=actions_csv,
-    )
+    # --- se receipts, deve essere presente --png-dir ---
+    if args.docs_type == "receipts":
+        if args.png_dir is None:
+            raise SystemExit("[ERROR] --docs-type receipts richiede anche --png-dir PNGDIR")
+        png_dir = Path(args.png_dir)
+
+        if not png_dir.is_dir():
+            raise SystemExit(f"[ERROR] PNG directory not found: {png_dir}")
+
+        n_all, n_rel = process_directory(
+            pdf_dir=png_dir,         # <--- directory PNG
+            topic=topic,
+            out_csv=out_csv,
+            profile=profile,
+            relevance_threshold=args.threshold,
+            max_pages=None,          # le PNG non hanno pagine
+            actions_csv=actions_csv,
+            docs_type="receipts",    
+            grobid_url=None,
+        )
+
+    else:
+        n_all, n_rel = process_directory(
+            pdf_dir=pdf_dir,
+            topic=topic,
+            out_csv=out_csv,
+            profile=profile,
+            relevance_threshold=args.threshold,
+            max_pages=max_pages,
+            actions_csv=actions_csv,
+            docs_type=args.docs_type,
+            grobid_url=grobid_url,
+        )
 
     print(f"[PROFILE] {profile.get('name', 'unnamed')} | TOPIC: {topic}")
     print(f"[DONE] Processed: {n_all}, relevant ≥ {args.threshold}%: {n_rel} -> {out_csv}")

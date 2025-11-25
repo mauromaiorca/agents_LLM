@@ -13,6 +13,8 @@ pandas==2.3.3
 streamlit
 pyyaml
 openai
+pillow
+
 
 
 # Optional OCR/table extraction (install only if needed)
