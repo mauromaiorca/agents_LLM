@@ -16,7 +16,7 @@ It uses ONLY the classic LangChain imports:
 
 All prompts / schema / questions live in the YAML profile (e.g. marine_valuation.yml).
 """
-
+import copy
 import os
 import re
 import json
@@ -150,7 +150,92 @@ def make_llm() -> ChatOpenAI:
 
 
 def make_embed() -> HuggingFaceEmbeddings:
-    return HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2",model_kwargs={"device": "cpu"},encode_kwargs={"device": "cpu"},)
+    return HuggingFaceEmbeddings(
+        model_name="sentence-transformers/all-MiniLM-L6-v2",
+        model_kwargs={"device": "cpu"},
+        encode_kwargs={"device": "cpu"},
+    )
+
+
+# --------------------------------------------
+# clean metadata
+# --------------------------------------------
+def _normalize_ws(s: str) -> str:
+    """Collapse whitespace to single spaces and strip ends."""
+    return re.sub(r"\s+", " ", s or "").strip()
+
+
+def clean_metadata(meta: dict) -> dict:
+    """
+    Post-process the GROBID metadata to remove obvious noise:
+      - drop sections that duplicate the abstract
+      - drop the 'references' section if structured references exist
+      - deduplicate sections with the same text, preferring typed/titled ones
+      - propagate titles to typed sections when possible (e.g. acknowledgments)
+    """
+    m = copy.deepcopy(meta)
+
+    abstract = m.get("abstract") or ""
+    refs_list = m.get("references") or []
+    abs_norm = _normalize_ws(abstract)
+
+    sections = m.get("sections") or []
+    grouped = {}
+    order = {}
+
+    for idx, sec in enumerate(sections):
+        text = sec.get("text") or ""
+        tnorm = _normalize_ws(text)
+        if not tnorm:
+            # empty or whitespace-only section, drop it
+            continue
+
+        # drop section that is literally the abstract
+        if abs_norm and tnorm == abs_norm:
+            continue
+
+        # drop 'references' section if we already have structured references
+        if sec.get("type") == "references" and refs_list:
+            continue
+
+        key = tnorm
+        if key not in grouped:
+            grouped[key] = []
+            order[key] = idx
+        grouped[key].append((idx, sec))
+
+    cleaned_secs = []
+
+    for key, items in grouped.items():
+        # choose the "best" representative for this text:
+        #  1) with non-empty type
+        #  2) with non-empty title
+        #  3) earliest in document
+        def score(item):
+            idx, sec = item
+            return (
+                1 if sec.get("type") else 0,
+                1 if sec.get("title") else 0,
+                -idx,
+            )
+
+        best_idx, best_sec = max(items, key=score)
+
+        # if the chosen section has no title but another variant has one,
+        # copy the title over (e.g. acknowledgments, funding, etc.)
+        if not best_sec.get("title"):
+            for idx, sec in items:
+                if sec.get("title"):
+                    best_sec["title"] = sec["title"]
+                    break
+
+        cleaned_secs.append((order[key], best_sec))
+
+    # restore original order by first occurrence
+    cleaned_secs.sort(key=lambda x: x[0])
+    m["sections"] = [sec for _, sec in cleaned_secs]
+
+    return m
 
 
 # ----------------------------------------------------------------------
@@ -1002,6 +1087,7 @@ def text_convert_directory(
     max_pages: Optional[int] = None,
     use_ocr_fallback: bool = True,
     with_tables: bool = True,
+    metadata_out_dir: Optional[Path] = None,
 ) -> None:
     """
     Convert documents in pdf_dir to plain text and save them into out_dir.
@@ -1014,6 +1100,10 @@ def text_convert_directory(
     extracted text is printed to stdout so you can inspect the conversion.
     """
     out_dir.mkdir(parents=True, exist_ok=True)
+
+    if metadata_out_dir is not None:
+        metadata_out_dir.mkdir(parents=True, exist_ok=True)
+
 
     # Select files based on docs_type
     if docs_type == "receipts":
@@ -1084,6 +1174,72 @@ def text_convert_directory(
         out_path = out_dir / (p.stem + ".txt")
         out_path.write_text(text, encoding="utf-8")
         print(f"[TEXT-CONVERT] Saved to: {out_path}")
+        
+        # --- write structured metadata JSON (GROBID) ---
+        if metadata_out_dir is not None and docs_type == "paper":
+            meta = grobid_extract_all(
+                pdf_path=p,
+                grobid_url=grobid_url,
+                max_pages=max_pages,
+                with_tables=with_tables,
+            )
+
+            if not meta:
+                # Fallback JSON if GROBID failed, so we still produce a file
+                meta = {
+                    "pdf_filename": p.name,
+                    "error": "grobid_extract_all returned empty",
+                }
+            else:
+                meta = clean_metadata(meta)
+
+            json_path = metadata_out_dir / (p.stem + ".json")
+            json_path.write_text(
+                json.dumps(meta, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            print(f"[TEXT-CONVERT] Saved metadata JSON to: {json_path}")
+
+# ----------------------------------------------------------------------
+# Chunking & Retriever (RAG)
+# ----------------------------------------------------------------------
+class _LexicalRetriever:
+    """
+    Fallback retriever che non usa embeddings né Torch.
+    Se la costruzione di Chroma/HF fallisce, usiamo questo:
+    rank dei chunk per sovrapposizione di termini con la query.
+    """
+    def __init__(self, docs, k: int = 8):
+        self.docs = docs
+        self.k = k
+
+    def get_relevant_documents(self, query: str):
+        import re
+
+        # tokenizzazione molto semplice
+        terms = [t for t in re.findall(r"\w+", (query or "").lower()) if len(t) > 2]
+        if not terms:
+            # se la query è vuota o quasi, restituisco i primi k chunk
+            return self.docs[: self.k]
+
+        scored = []
+        for d in self.docs:
+            content = (getattr(d, "page_content", "") or "").lower()
+            score = 0
+            for t in terms:
+                # bag-of-words naïf: conteggio delle occorrenze
+                score += content.count(t)
+            scored.append((score, d))
+
+        # ordina per score decrescente
+        scored.sort(key=lambda x: x[0], reverse=True)
+
+        # se tutti gli score sono zero, prendo comunque i primi k chunk
+        non_zero = [d for s, d in scored if s > 0]
+        if not non_zero:
+            non_zero = [d for _, d in scored]
+
+        return non_zero[: self.k]
 
 
 
@@ -1091,16 +1247,31 @@ def text_convert_directory(
 # Chunking & Retriever (RAG)
 # ----------------------------------------------------------------------
 def build_retriever_from_text(text: str, k: int = 8):
+    """
+    Costruisce un retriever RAG.
+
+    Primo tentativo: Chroma + HuggingFaceEmbeddings (richiede Torch, Transformers, ecc.).
+    Se qualcosa fallisce (import di sentence-transformers, incompatibilità Torch, ecc.),
+    cade su un retriever lessicale (_LexicalRetriever) che non usa nessuna dipendenza pesante.
+    """
     splitter = RecursiveCharacterTextSplitter(chunk_size=1500, chunk_overlap=150)
     docs = splitter.create_documents([text])
-    vs = Chroma.from_documents(docs, embedding=make_embed())
-    return vs.as_retriever(search_kwargs={"k": k})
+
+    try:
+        vs = Chroma.from_documents(docs, embedding=make_embed())
+        return vs.as_retriever(search_kwargs={"k": k})
+    except Exception as e:
+        # Fallback completamente CPU / no-Torch
+        print(f"[WARN] build_retriever_from_text: embeddings/Chroma failed, "
+              f"using lexical fallback. Error: {e}")
+        return _LexicalRetriever(docs, k=k)
 
 
 def top_k_snippets_for_query(text: str, query: str, k: int = 8) -> str:
     retriever = build_retriever_from_text(text, k=k)
     docs = retriever.get_relevant_documents(query)
-    return "\n\n---\n\n".join(d.page_content[:2000] for d in docs)
+    return "\n\n---\n\n".join((d.page_content or "")[:2000] for d in docs)
+
 
 
 # ----------------------------------------------------------------------

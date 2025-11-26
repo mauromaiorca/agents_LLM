@@ -14,7 +14,7 @@ streamlit
 pyyaml
 openai
 pillow
-
+sentence-transformers
 
 
 # Optional OCR/table extraction (install only if needed)
