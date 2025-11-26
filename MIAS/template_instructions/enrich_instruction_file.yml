@@ -1,0 +1,481 @@
+profile_name: scientific_article_enrichment
+description: >
+  Generic profile for scientific research articles. It extracts high-level
+  bibliographic and methodological information and builds rich question–answer
+  scaffolds that can later be used to fine-tune an LLM for document-level and
+  section-level retrieval.
+
+topic: >
+  Scientific research articles in biology, biomedical imaging, technology
+  management, digital marketing, and related quantitative empirical studies
+  about technologies, channels, and interactive processes.
+
+schema_fields:
+  - pdf_filename
+  - relevance
+  - relevance_percentage
+  - title
+  - authors
+  - journal
+  - year
+  - doi
+  - field
+  - subfield
+  - main_research_question
+  - main_hypotheses
+  - application_domain
+  - organisms_or_systems
+  - data_modalities
+  - study_type
+  - experimental_design
+  - sample_description
+  - interventions_or_exposures
+  - outcomes_or_endpoints
+  - main_methods
+  - main_techniques
+  - main_software_or_tools
+  - key_findings
+  - effect_direction
+  - practical_implications
+  - limitations
+  - open_questions
+  - general_keywords
+  - methods_keywords
+  - results_keywords
+  - entities_biomolecules_or_technologies
+  - entities_organisms_or_populations
+  - tags
+  - qa_overall
+  - qa_methods
+  - qa_results
+  - qa_limitations
+  - figure_mentions
+  - table_mentions
+  - dataset_availability
+  - code_availability
+  - repository_links
+  - summary_one_sentence
+  - summary_three_sentences
+
+# Campi per cui NON vogliamo colonne "...__evidence" nel CSV
+evidence_exclude:
+  - pdf_filename
+  - relevance
+  - relevance_percentage
+  - title
+  - authors
+  - journal
+  - year
+  - doi
+  - qa_overall
+  - qa_methods
+  - qa_results
+  - qa_limitations
+  - summary_one_sentence
+  - summary_three_sentences
+
+relevance:
+  system_prompt: |-
+    You are a careful scientific relevance classifier.
+
+    Given a TOPIC and CONTEXT composed of snippets from a scientific article,
+    decide how relevant the article is to the TOPIC.
+
+    Use this 0–100 scale:
+
+      - 90–100: The article is clearly on-topic; it directly studies concepts,
+        methods, data, or applications described in the TOPIC.
+      - 75–89: Substantially related; at least one of methods, results, or
+        discussion sections is clearly aligned with the TOPIC.
+      - 50–74: Partially related; the TOPIC is mentioned or used as context,
+        but is not the main focus.
+      - 25–49: Weakly related; only brief or generic mention of related ideas.
+      - 0–24: Not related; the article is about a different domain or problem.
+
+    Rules:
+      - Consider both the scientific domain (e.g. biology, imaging, management,
+        marketing) and the type of contribution (theoretical, methods, empirical).
+      - Do not give high scores based only on vague overlaps in terminology.
+      - Avoid defaulting to round numbers; calibrate to the actual evidence.
+
+    Output format (STRICT):
+      Return ONLY valid JSON with keys:
+        - relevance_percentage : integer 0..100
+        - rationale            : short 1–2 sentence explanation
+
+global_extraction:
+  system_prompt: |-
+    You are a careful scientific extraction assistant.
+
+    Given the TITLE and FULL_TEXT of a research article, extract structured
+    information about the article. You must not invent information that is
+    not supported by the text.
+
+    General rules:
+      - If a field is not present, clearly ambiguous, or cannot be determined,
+        output exactly "N/A" (capital N, slash, A).
+      - Where multiple values exist (e.g. several authors, organisms, techniques),
+        join them with "; " (semicolon + space).
+      - All fields must be strings.
+      - For question–answer (QA) fields, you must return a JSON-encoded string:
+        that string must itself contain a JSON array of objects with keys
+        "question" and "answer".
+      - Keep all answers concise and focused on what is explicit in the article.
+      - Do not copy long passages; paraphrase compactly.
+
+    Required output keys (all as strings):
+
+      pdf_filename                     : "N/A" (will be filled by the caller)
+      title                            : article title
+      authors                          : main authors, e.g. "Surname1, Name1; Surname2, Name2"
+      journal                          : journal or outlet name
+      year                             : publication year (YYYY) if explicit, else "N/A"
+      doi                              : DOI if explicit, else "N/A"
+      field                            : main scientific field (e.g. "biology", "biomedical imaging",
+                                         "technology management", "marketing", "computer science")
+      subfield                         : more specific subfield (e.g. "cryo-EM", "digital marketing analytics")
+      main_research_question           : one clear sentence describing the central research question
+      main_hypotheses                  : short description of explicit or implicit hypotheses
+      application_domain               : application setting (e.g. "structural biology", "retail marketing",
+                                         "hospital workflows", "social media platforms") or "N/A"
+      organisms_or_systems             : biological organisms, cell types, tissues, devices, organisations etc.
+      data_modalities                  : e.g. "cryo-EM", "MRI", "survey data", "transaction logs", "text corpora"
+      study_type                       : e.g. "theoretical", "methods", "simulation", "experimental",
+                                         "observational", "case study", "meta-analysis"
+      experimental_design              : very short description of experimental or study design, else "N/A"
+      sample_description               : key information on sample (organisms, participants, cases) or "N/A"
+      interventions_or_exposures       : main interventions, treatments, manipulations, or exposures, or "N/A"
+      outcomes_or_endpoints            : primary outcomes or endpoints that are measured or analysed
+      main_methods                     : 1–2 phrases summarising main methodological approach
+      main_techniques                  : main techniques (e.g. "single-particle cryo-EM", "regression models",
+                                         "transformer-based NLP") separated by "; "
+      main_software_or_tools           : important software, toolboxes, or frameworks if mentioned, else "N/A"
+      key_findings                     : 2–3 compact sentences describing the main findings
+      effect_direction                 : if applicable, summary of direction of effect (e.g. "increases", "decreases"),
+                                         else "N/A"
+      practical_implications           : concrete implications for practice, policy, or technology use, else "N/A"
+      limitations                      : key limitations mentioned by the authors, else "N/A"
+      open_questions                   : explicit open questions, future work, or unresolved issues, else "N/A"
+      general_keywords                 : 5–10 general keywords, comma-separated
+      methods_keywords                 : 5–10 method-focused keywords, comma-separated
+      results_keywords                 : 5–10 result-focused keywords, comma-separated
+      entities_biomolecules_or_technologies : biomolecules, proteins, genes, or technologies of interest, else "N/A"
+      entities_organisms_or_populations      : organisms, species, populations, patient groups, etc., else "N/A"
+      tags                             : short machine-oriented tags, comma-separated (e.g. "cryo_em, tomography")
+      qa_overall                       : JSON-encoded string containing an array of 3–6 (question, answer) pairs
+                                         about the overall contribution and context of the article
+      qa_methods                       : JSON-encoded string containing an array of 3–6 (question, answer) pairs
+                                         centred on methods and study design
+      qa_results                       : JSON-encoded string containing an array of 3–6 (question, answer) pairs
+                                         centred on the main results and their interpretation
+      qa_limitations                   : JSON-encoded string containing an array of 1–4 (question, answer) pairs
+                                         about limitations and open questions
+      figure_mentions                  : short description of what the main figures illustrate, or "N/A"
+      table_mentions                   : short description of what the main tables report, or "N/A"
+      dataset_availability             : "1" if datasets are explicitly available in repositories or supplements,
+                                         "0" otherwise
+      code_availability                : "1" if source code or software is explicitly available, "0" otherwise
+      repository_links                 : list of repositories (e.g. DOIs, URLs, accession numbers) as a single
+                                         string, or "N/A"
+      summary_one_sentence             : one-sentence summary of the article
+      summary_three_sentences          : three-sentence summary of the article
+
+    For the QA fields (qa_overall, qa_methods, qa_results, qa_limitations):
+      - Represent the value as a JSON-encoded string.
+      - Inside that string, build a JSON array of objects with keys "question" and "answer".
+      - Each question must be specific, technically meaningful, and answerable using the article.
+
+    Return STRICTLY one flat JSON object with all the keys above.
+
+fields:
+
+  field:
+    evidence: false
+    question: |-
+      Task: classify the main scientific field of the article.
+
+      Choose a compact label such as:
+        - "biology", "biochemistry", "biophysics", "biomedical imaging",
+          "neuroscience", "medicine", "public health",
+          "computer science", "machine learning", "statistics",
+          "technology management", "information systems", "marketing",
+          "economics", "operations", or another similarly concise term.
+
+      If the field is unclear, return "N/A".
+
+      Output: a single short string.
+
+  subfield:
+    evidence: false
+    question: |-
+      Task: identify a more specific subfield.
+
+      Examples:
+        - "cryo-EM", "single-particle cryo-EM", "cryo-electron tomography",
+          "neuroimaging", "digital marketing analytics", "text mining",
+          "recommendation systems", "innovation management".
+
+      If no clear subfield is identifiable, return "N/A".
+
+      Output: a single short string.
+
+  application_domain:
+    evidence: true
+    question: |-
+      Task: describe the application domain of the study.
+
+      Examples:
+        - "structural biology of membrane proteins"
+        - "customer behaviour in online retail"
+        - "hospital workflow optimisation"
+        - "B2B technology adoption"
+
+      If the work is purely theoretical or methods-focused with no explicit
+      application, return "N/A".
+
+      Output: one short phrase.
+
+  organisms_or_systems:
+    evidence: true
+    question: |-
+      Task: identify biological organisms or systems if present.
+
+      Include species, cell types, tissues, organs, or non-biological systems
+      (e.g. "organisations", "platforms") if they are the explicit focus.
+
+      If several are clearly central, join them with "; ".
+      If none are mentioned, return "N/A".
+
+      Output: a single string.
+
+  data_modalities:
+    evidence: true
+    question: |-
+      Task: list the main data modalities used in the study.
+
+      Examples:
+        - "cryo-EM images", "MRI", "EEG", "behavioural experiments",
+          "survey responses", "administrative records", "clickstream data",
+          "text documents", "social media posts".
+
+      Join multiple modalities with "; ". If the article is purely theoretical
+      and uses no empirical data, return "N/A".
+
+      Output: a single string.
+
+  study_type:
+    evidence: true
+    question: |-
+      Task: classify the type of study.
+
+      Choose one of:
+        - "theoretical", "methods", "simulation", "experimental",
+          "observational", "case study", "meta-analysis", "review", "other".
+
+      If the best label is unclear, choose "other".
+
+      Output: a single token from the list.
+
+  main_methods:
+    evidence: true
+    question: |-
+      Task: summarise the main methodological approach.
+
+      Provide 1–2 short phrases describing how the study is conducted (e.g.
+      "single-particle cryo-EM reconstruction of macromolecular complexes",
+      "panel regression models on firm-level data", "transformer-based
+      language modelling").
+
+      Output: a compact string.
+
+  main_techniques:
+    evidence: true
+    question: |-
+      Task: list the main techniques used in the article.
+
+      Examples:
+        - "single-particle cryo-EM"; "cryo-electron tomography";
+          "molecular dynamics simulations"; "regression"; "random forests";
+          "topic modelling"; "structural equation modelling".
+
+      Join multiple techniques with "; ". Use "N/A" only if the paper is
+      purely conceptual.
+
+      Output: a single string.
+
+  entities_biomolecules_or_technologies:
+    evidence: true
+    question: |-
+      Task: list the key biomolecules or technologies explicitly studied.
+
+      Examples:
+        - "TRPV1 ion channel"; "mitochondrial ribosome"; "PfEMP1";
+          "recommender system"; "chatbot"; "programmatic advertising".
+
+      Join multiple entities with "; ". If not applicable, return "N/A".
+
+      Output: a single string.
+
+  entities_organisms_or_populations:
+    evidence: true
+    question: |-
+      Task: identify any organisms, patient groups, customers, firms, or other
+      populations that are the explicit subject of analysis.
+
+      Join multiple entries with "; ". If none are explicit, return "N/A".
+
+      Output: a single string.
+
+  figure_mentions:
+    evidence: true
+    question: |-
+      Task: briefly summarise what the main figures represent.
+
+      Focus on the scientific content (e.g. "3.2 Å cryo-EM map of yeast
+      mitochondrial ribosome", "dose–response curves", "architecture diagram").
+
+      If no figures are mentioned or described, return "N/A".
+
+      Output: a short sentence.
+
+  table_mentions:
+    evidence: true
+    question: |-
+      Task: briefly summarise what the main tables report.
+
+      Examples:
+        - "regression coefficients for adoption model"
+        - "summary statistics for patient cohort"
+        - "performance metrics of algorithms"
+
+      If there are no tables or they are not described, return "N/A".
+
+      Output: a short sentence.
+
+  dataset_availability:
+    evidence: true
+    question: |-
+      Task: determine whether datasets are explicitly made available.
+
+      Return:
+        - "1" if the article clearly states that data are available in a
+          repository, supplement, or upon request.
+        - "0" otherwise.
+
+      Output: "1" or "0".
+
+  code_availability:
+    evidence: true
+    question: |-
+      Task: determine whether source code or software is explicitly made available.
+
+      Return:
+        - "1" if the article clearly states that code is available in a
+          repository or supplement.
+        - "0" otherwise.
+
+      Output: "1" or "0".
+
+  repository_links:
+    evidence: true
+    question: |-
+      Task: extract any explicit repository links or accession identifiers.
+
+      Examples:
+        - DOIs, Zenodo links, GitHub URLs, OSF links, accession numbers.
+
+      Join multiple entries with "; ". If none are mentioned, return "N/A".
+
+      Output: a single string.
+
+section_enrichment:
+  system_prompt: |-
+    You analyse ONE SECTION of a scientific article.
+
+    Input (from the user message):
+      - SECTION_INDEX
+      - SECTION_TITLE
+      - SECTION_TEXT
+
+    Focus only on SECTION_TEXT for the scientific content. Use SECTION_TITLE
+    only for context. Do not assume information from other parts of the paper.
+
+    Task:
+      Return a single JSON object with exactly these keys:
+
+        - section_role
+        - section_main_research_question
+        - section_secondary_questions
+        - section_hypotheses_or_assumptions
+        - section_key_ideas
+        - section_methods_summary
+        - section_results_summary
+        - section_limitations_or_caveats
+        - section_general_keywords
+        - section_methods_keywords
+        - section_results_keywords
+        - section_qa_local
+
+    Semantics and formats:
+
+      section_role:
+        - Functional role of the section.
+        - Choose one of:
+            "introduction", "background", "theory", "methods",
+            "results", "discussion", "conclusion", "application",
+            "example", "other".
+
+      section_main_research_question:
+        - One sentence describing the main question or problem that this
+          section addresses. If it is mostly background, phrase it as
+          "What does this section clarify or define?". Use "N/A" only if
+          truly impossible.
+
+      section_secondary_questions:
+        - JSON array of 2–6 short strings.
+        - Each string is a concrete scientific question that the section
+          helps to answer or clarify.
+
+      section_hypotheses_or_assumptions:
+        - Short text describing explicit hypotheses, assumptions or
+          constraints (e.g. causality, homogeneity).
+        - If none are present, use "N/A".
+
+      section_key_ideas:
+        - 2–4 compact sentences with the main conceptual points of the section.
+
+      section_methods_summary:
+        - 1–3 sentences summarising methods, equations, or procedures
+          if the section is methodological.
+        - If not applicable, use "N/A".
+
+      section_results_summary:
+        - 1–3 sentences summarising results, properties, or proven
+          statements (e.g. uniqueness, existence).
+        - If there are no results, use "N/A".
+
+      section_limitations_or_caveats:
+        - Any explicit caveats or conditions of validity.
+        - If none are explicit, use "N/A".
+
+      section_general_keywords:
+        - 5–10 general keywords for this section, comma-separated.
+
+      section_methods_keywords:
+        - 3–8 method-focused keywords, comma-separated.
+        - If no methods are present, you may output "N/A".
+
+      section_results_keywords:
+        - 3–8 result-focused or property-focused keywords, comma-separated.
+        - If there are no results, use "N/A".
+
+      section_qa_local:
+        - JSON array of 3–8 objects, each with keys "question" and "answer".
+        - Each question must be specific to THIS SECTION and answerable
+          from SECTION_TEXT.
+
+    Output:
+      - Return ONLY the JSON object.
+      - Do NOT wrap it in backticks or extra text.
+
+
