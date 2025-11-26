@@ -88,6 +88,16 @@ this will produce a directory and a file that looks : [/home/mauro/test/testLLM/
 that hopefully has more informative fields.
 
 ## Other uses
+If you want to produce json files of papers structured (using grobid), use this command:
+```bash
+code/run_pdf_relevance_pipeline.py --pdf-dir techAndMarketing_docs/ --config template_instructions/scontrini_instructions.yml --out-csv analysis/instruction_papers.csv --out-metadata-basedir techAndMarketing_json --docs-type paper
+```
+
+If you want to enrich json files of papers structured (using grobid), use this command:
+```bash
+./code/parse_documents.py --docs-dir cryoEM_documents/  --enrich template_instructions/enrich_instruction_file.yml --out-json-dir cryoEM_enriched_json/ --docs-type paper
+```
+
 If you got png or jpg receipts in a folder, you can run the program with this parameters:
 ```bash
 code/run_pdf_relevance_pipeline.py --png-dir scontrini/ --config template_instructions/scontrini_instructions.yml --out-csv analysis/scontrini_new.csv --docs-type receipts
