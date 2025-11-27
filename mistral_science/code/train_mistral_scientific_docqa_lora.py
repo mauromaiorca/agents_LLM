@@ -143,11 +143,34 @@ def build_prompt_and_labels_for_sample(
             add_special_tokens=False,
         ).input_ids
 
-    # Check total length, drop if too long
+    # -------------------------------------------------------------
+    # Check total length.
+    # Se troppo lungo:
+    #   - prima proviamo a tagliare il PROMPT dalla testa,
+    #   - se perfino la sola risposta è troppo lunga, teniamo
+    #     solo la coda della risposta (e scartiamo il prompt).
+    # -------------------------------------------------------------
     total_length = len(prompt_ids) + len(answer_ids)
+
     if total_length > max_length:
-        # Could log here, but we keep it quiet to avoid flooding stdout
-        return None
+        # spazio massimo per il prompt, tenendo intera la risposta
+        max_prompt_len = max_length - len(answer_ids)
+
+        if max_prompt_len <= 0:
+            # Caso estremo: la risposta da sola eccede max_length.
+            # Tenere SOLO la coda della risposta, lunga max_length - 1,
+            # e nessun prompt.
+            answer_ids = answer_ids[-(max_length - 1):]
+            prompt_ids = []
+        else:
+            # Tagliare il prompt dalla testa (left-truncation),
+            # tenendo gli ultimi max_prompt_len token.
+            if len(prompt_ids) > max_prompt_len:
+                prompt_ids = prompt_ids[-max_prompt_len:]
+
+        total_length = len(prompt_ids) + len(answer_ids)
+        # a questo punto total_length <= max_length garantito
+
 
     input_ids = prompt_ids + answer_ids
     # Mask prompt tokens in labels
