@@ -103,6 +103,7 @@ relevance:
         - relevance_percentage : integer 0..100
         - rationale            : short 1–2 sentence explanation
 
+
 global_extraction:
   system_prompt: |-
     You are a careful scientific extraction assistant.
@@ -120,6 +121,26 @@ global_extraction:
       - For question–answer (QA) fields, you must return a JSON-encoded string:
         that string must itself contain a JSON array of objects with keys
         "question" and "answer".
+      - Within each QA array, prefer objective, fact-based questions:
+          * Whenever the article provides a concrete numeric value
+            (e.g. resolution "3.0 Å", sample size "n = 25", voltage "300 kV",
+            dose, temperature, concentration, p-value, accuracy, number of
+            images/participants/epochs), create at least one question whose
+            answer is exactly that value.
+          * Whenever the article specifies an explicit location related to
+            collection, preparation, or study context (e.g. "samples were
+            collected in Rome, Italy", "data were acquired at Facility X in
+            Country Y"), create a question whose answer is that location.
+          * Whenever the article explicitly states that a quantity or value
+            has not been computed, is not available, or is not reported
+            (e.g. "the resolution has not been computed because ...",
+            "the exact sample size is not reported"), create a question that
+            would normally ask for this quantity, and answer it with "N/A".
+          * When a question would be scientifically meaningful (e.g. resolution,
+            sample size, dose, location, exact parameter value) but the article
+            does not provide enough information and does not even state that it
+            is missing, you may still include such a question and answer it
+            with "N/A" instead of inventing an answer.
       - Keep all answers concise and focused on what is explicit in the article.
       - Do not copy long passages; paraphrase compactly.
 
@@ -162,13 +183,13 @@ global_extraction:
       entities_biomolecules_or_technologies : biomolecules, proteins, genes, or technologies of interest, else "N/A"
       entities_organisms_or_populations      : organisms, species, populations, patient groups, etc., else "N/A"
       tags                             : short machine-oriented tags, comma-separated (e.g. "cryo_em, tomography")
-      qa_overall                       : JSON-encoded string containing an array of 3–6 (question, answer) pairs
+      qa_overall                       : JSON-encoded string containing an array of 6–12 (question, answer) pairs
                                          about the overall contribution and context of the article
-      qa_methods                       : JSON-encoded string containing an array of 3–6 (question, answer) pairs
+      qa_methods                       : JSON-encoded string containing an array of 6–12 (question, answer) pairs
                                          centred on methods and study design
-      qa_results                       : JSON-encoded string containing an array of 3–6 (question, answer) pairs
+      qa_results                       : JSON-encoded string containing an array of 6–12 (question, answer) pairs
                                          centred on the main results and their interpretation
-      qa_limitations                   : JSON-encoded string containing an array of 1–4 (question, answer) pairs
+      qa_limitations                   : JSON-encoded string containing an array of 3–8 (question, answer) pairs
                                          about limitations and open questions
       figure_mentions                  : short description of what the main figures illustrate, or "N/A"
       table_mentions                   : short description of what the main tables report, or "N/A"
@@ -183,210 +204,17 @@ global_extraction:
     For the QA fields (qa_overall, qa_methods, qa_results, qa_limitations):
       - Represent the value as a JSON-encoded string.
       - Inside that string, build a JSON array of objects with keys "question" and "answer".
-      - Each question must be specific, technically meaningful, and answerable using the article.
-
+      - Each QA array should be rich:
+          * qa_overall: 6–12 pairs
+          * qa_methods: 6–12 pairs
+          * qa_results: 6–12 pairs
+          * qa_limitations: 3–8 pairs
+      - Each question must be specific, technically meaningful, and answerable
+        using the article.
+      - Whenever possible, include fact-based questions whose answers are
+        explicit numeric values, locations, or clearly stated "N/A" values for
+        quantities that are missing or not computed.
     Return STRICTLY one flat JSON object with all the keys above.
-
-fields:
-
-  field:
-    evidence: false
-    question: |-
-      Task: classify the main scientific field of the article.
-
-      Choose a compact label such as:
-        - "biology", "biochemistry", "biophysics", "biomedical imaging",
-          "neuroscience", "medicine", "public health",
-          "computer science", "machine learning", "statistics",
-          "technology management", "information systems", "marketing",
-          "economics", "operations", or another similarly concise term.
-
-      If the field is unclear, return "N/A".
-
-      Output: a single short string.
-
-  subfield:
-    evidence: false
-    question: |-
-      Task: identify a more specific subfield.
-
-      Examples:
-        - "cryo-EM", "single-particle cryo-EM", "cryo-electron tomography",
-          "neuroimaging", "digital marketing analytics", "text mining",
-          "recommendation systems", "innovation management".
-
-      If no clear subfield is identifiable, return "N/A".
-
-      Output: a single short string.
-
-  application_domain:
-    evidence: true
-    question: |-
-      Task: describe the application domain of the study.
-
-      Examples:
-        - "structural biology of membrane proteins"
-        - "customer behaviour in online retail"
-        - "hospital workflow optimisation"
-        - "B2B technology adoption"
-
-      If the work is purely theoretical or methods-focused with no explicit
-      application, return "N/A".
-
-      Output: one short phrase.
-
-  organisms_or_systems:
-    evidence: true
-    question: |-
-      Task: identify biological organisms or systems if present.
-
-      Include species, cell types, tissues, organs, or non-biological systems
-      (e.g. "organisations", "platforms") if they are the explicit focus.
-
-      If several are clearly central, join them with "; ".
-      If none are mentioned, return "N/A".
-
-      Output: a single string.
-
-  data_modalities:
-    evidence: true
-    question: |-
-      Task: list the main data modalities used in the study.
-
-      Examples:
-        - "cryo-EM images", "MRI", "EEG", "behavioural experiments",
-          "survey responses", "administrative records", "clickstream data",
-          "text documents", "social media posts".
-
-      Join multiple modalities with "; ". If the article is purely theoretical
-      and uses no empirical data, return "N/A".
-
-      Output: a single string.
-
-  study_type:
-    evidence: true
-    question: |-
-      Task: classify the type of study.
-
-      Choose one of:
-        - "theoretical", "methods", "simulation", "experimental",
-          "observational", "case study", "meta-analysis", "review", "other".
-
-      If the best label is unclear, choose "other".
-
-      Output: a single token from the list.
-
-  main_methods:
-    evidence: true
-    question: |-
-      Task: summarise the main methodological approach.
-
-      Provide 1–2 short phrases describing how the study is conducted (e.g.
-      "single-particle cryo-EM reconstruction of macromolecular complexes",
-      "panel regression models on firm-level data", "transformer-based
-      language modelling").
-
-      Output: a compact string.
-
-  main_techniques:
-    evidence: true
-    question: |-
-      Task: list the main techniques used in the article.
-
-      Examples:
-        - "single-particle cryo-EM"; "cryo-electron tomography";
-          "molecular dynamics simulations"; "regression"; "random forests";
-          "topic modelling"; "structural equation modelling".
-
-      Join multiple techniques with "; ". Use "N/A" only if the paper is
-      purely conceptual.
-
-      Output: a single string.
-
-  entities_biomolecules_or_technologies:
-    evidence: true
-    question: |-
-      Task: list the key biomolecules or technologies explicitly studied.
-
-      Examples:
-        - "TRPV1 ion channel"; "mitochondrial ribosome"; "PfEMP1";
-          "recommender system"; "chatbot"; "programmatic advertising".
-
-      Join multiple entities with "; ". If not applicable, return "N/A".
-
-      Output: a single string.
-
-  entities_organisms_or_populations:
-    evidence: true
-    question: |-
-      Task: identify any organisms, patient groups, customers, firms, or other
-      populations that are the explicit subject of analysis.
-
-      Join multiple entries with "; ". If none are explicit, return "N/A".
-
-      Output: a single string.
-
-  figure_mentions:
-    evidence: true
-    question: |-
-      Task: briefly summarise what the main figures represent.
-
-      Focus on the scientific content (e.g. "3.2 Å cryo-EM map of yeast
-      mitochondrial ribosome", "dose–response curves", "architecture diagram").
-
-      If no figures are mentioned or described, return "N/A".
-
-      Output: a short sentence.
-
-  table_mentions:
-    evidence: true
-    question: |-
-      Task: briefly summarise what the main tables report.
-
-      Examples:
-        - "regression coefficients for adoption model"
-        - "summary statistics for patient cohort"
-        - "performance metrics of algorithms"
-
-      If there are no tables or they are not described, return "N/A".
-
-      Output: a short sentence.
-
-  dataset_availability:
-    evidence: true
-    question: |-
-      Task: determine whether datasets are explicitly made available.
-
-      Return:
-        - "1" if the article clearly states that data are available in a
-          repository, supplement, or upon request.
-        - "0" otherwise.
-
-      Output: "1" or "0".
-
-  code_availability:
-    evidence: true
-    question: |-
-      Task: determine whether source code or software is explicitly made available.
-
-      Return:
-        - "1" if the article clearly states that code is available in a
-          repository or supplement.
-        - "0" otherwise.
-
-      Output: "1" or "0".
-
-  repository_links:
-    evidence: true
-    question: |-
-      Task: extract any explicit repository links or accession identifiers.
-
-      Examples:
-        - DOIs, Zenodo links, GitHub URLs, OSF links, accession numbers.
-
-      Join multiple entries with "; ". If none are mentioned, return "N/A".
-
-      Output: a single string.
 
 section_enrichment:
   system_prompt: |-
@@ -432,7 +260,7 @@ section_enrichment:
           truly impossible.
 
       section_secondary_questions:
-        - JSON array of 2–6 short strings.
+        - JSON array of 3–8 short strings.
         - Each string is a concrete scientific question that the section
           helps to answer or clarify.
 
@@ -445,8 +273,7 @@ section_enrichment:
         - 2–4 compact sentences with the main conceptual points of the section.
 
       section_methods_summary:
-        - 1–3 sentences summarising methods, equations, or procedures
-          if the section is methodological.
+        - 1–3 sentences summarising methods, equations, or procedures.
         - If not applicable, use "N/A".
 
       section_results_summary:
@@ -470,12 +297,36 @@ section_enrichment:
         - If there are no results, use "N/A".
 
       section_qa_local:
-        - JSON array of 3–8 objects, each with keys "question" and "answer".
+        - JSON array of 10–25 objects, each with keys "question" and "answer".
+        - The array should be as rich as possible within this range.
         - Each question must be specific to THIS SECTION and answerable
           from SECTION_TEXT.
+        - Strongly prefer objective, fact-based questions where possible:
+            * For every explicit numeric value in SECTION_TEXT
+              (e.g. resolution "3.0 Å", number of particles, sample size,
+              doses, concentrations, temperatures, voltages, exposure times,
+              p-values, accuracies, iteration counts, epochs, number of
+              samples/images/subjects), include at least one question whose
+              answer is exactly that numeric value.
+            * For every explicit location in SECTION_TEXT that is relevant to
+              data collection, sample origin, or experiment context
+              (e.g. "samples were taken in Rome, Italy"), include a question
+              whose answer is that location (e.g. "Where were the samples
+              taken?" → "Rome, Italy").
+            * If SECTION_TEXT explicitly states that an important quantity
+              (e.g. resolution, sample size, dose, exact parameter value)
+              has not been computed, is not available, or is not reported,
+              include a question asking for that quantity and answer it with
+              "N/A" exactly.
+            * If a scientifically meaningful quantity or detail is implied
+              (e.g. resolution, sample size, exact time, dose, location) but
+              not given in the section, you may still include such a question
+              and answer it with "N/A" instead of inventing a value.
+            * In addition to numeric and location questions, include questions
+              about methods, results, and interpretations that are tightly
+              grounded in SECTION_TEXT.
 
     Output:
       - Return ONLY the JSON object.
       - Do NOT wrap it in backticks or extra text.
-
 
