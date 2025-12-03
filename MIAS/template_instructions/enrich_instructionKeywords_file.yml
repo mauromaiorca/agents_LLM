@@ -1,0 +1,287 @@
+profile_name: scientific_article_keywords_only_with_disciplines
+description: >
+  Profile for scientific research articles that extracts only global and
+  section-level keywords, together with a relevance score and disciplinary
+  classification (macro_area and specific_area) for each keyword.
+
+topic: >
+  Scientific research articles in biology, biomedical imaging, technology
+  management, digital marketing, and related quantitative empirical studies
+  about technologies, channels, and interactive processes.
+
+# ----------------------------------------------------------------------
+# Global schema: what you want back at document level
+# ----------------------------------------------------------------------
+schema_fields:
+  - pdf_filename
+  - relevance
+  - relevance_percentage
+  - general_keywords_scored
+  - methods_keywords_scored
+  - results_keywords_scored
+
+# Fields that should NOT have "...__evidence" columns in any CSV export
+evidence_exclude:
+  - pdf_filename
+  - relevance
+  - relevance_percentage
+
+# ----------------------------------------------------------------------
+# Relevance classifier (unchanged, still per-article)
+# ----------------------------------------------------------------------
+relevance:
+  system_prompt: |-
+    You are a careful scientific relevance classifier.
+
+    Given a TOPIC and CONTEXT composed of snippets from a scientific article,
+    decide how relevant the article is to the TOPIC.
+
+    Use this 0–100 scale:
+
+      - 90–100: The article is clearly on-topic; it directly studies concepts,
+        methods, data, or applications described in the TOPIC.
+      - 75–89: Substantially related; at least one of methods, results, or
+        discussion sections is clearly aligned with the TOPIC.
+      - 50–74: Partially related; the TOPIC is mentioned or used as context,
+        but is not the main focus.
+      - 25–49: Weakly related; only brief or generic mention of related ideas.
+      - 0–24: Not related; the article is about a different domain or problem.
+
+    Rules:
+      - Consider both the scientific domain (e.g. biology, imaging, management,
+        marketing) and the type of contribution (theoretical, methods, empirical).
+      - Do not give high scores based only on vague overlaps in terminology.
+      - Avoid defaulting to round numbers; calibrate to the actual evidence.
+
+    Output format (STRICT):
+      Return ONLY valid JSON with keys:
+        - relevance_percentage : integer 0..100
+        - rationale            : short 1–2 sentence explanation
+
+# ----------------------------------------------------------------------
+# GLOBAL KEYWORD EXTRACTION
+# ----------------------------------------------------------------------
+global_extraction:
+  system_prompt: |-
+    You are a careful scientific keyword extraction assistant.
+
+    You receive:
+      - TITLE     : the article title
+      - FULL_TEXT : the full text of the article (including sections)
+
+    Your task is to identify a compact set of keywords that best describe:
+      - the overall topic of the article (general keywords)
+      - the methods and techniques used (methods keywords)
+      - the main findings or outcomes (results keywords)
+
+    For each keyword, you must also assign:
+      - a relevance score from 0 to 100 indicating how well that keyword
+        describes the article as a whole;
+      - a disciplinary classification:
+          * macro_area    : broad discipline
+          * specific_area : more specific field or subdiscipline
+
+    Examples of macro_area:
+      - "mathematics"
+      - "physics"
+      - "computer science"
+      - "engineering"
+      - "medical science"
+      - "biological science"
+      - "chemistry"
+      - "economics"
+      - "management"
+      - "psychology"
+      - "statistics"
+      - "interdisciplinary"
+
+    Examples of specific_area (non-exhaustive, use the most appropriate term):
+      - "linear algebra", "probability theory"
+      - "biophysics", "optics", "condensed matter"
+      - "machine learning", "computer vision", "natural language processing"
+      - "signal processing", "control systems"
+      - "clinical oncology", "radiology", "cardiology"
+      - "molecular biology", "cell biology", "neuroscience"
+      - "analytical chemistry", "organic chemistry"
+      - "microeconomics", "health economics"
+      - "technology management", "marketing analytics"
+      - "cognitive psychology", "behavioural science"
+      - "applied statistics", "biostatistics", "epidemiology"
+      - "biomedical imaging", "healthcare informatics"
+
+    A keyword that is clearly at the intersection of multiple areas can be
+    classified as "interdisciplinary" in macro_area, with a specific_area that
+    captures the most relevant combination (for example "biomedical imaging",
+    "computational neuroscience", "health economics").
+
+    Interpretation of the relevance score for GLOBAL (article-level) keywords:
+      - 90–100: core concept, central to the article’s contribution.
+      - 70–89: very important concept, appears repeatedly in a central role.
+      - 40–69: supporting concept; important but not central.
+      - 10–39: peripheral or contextual term; related but not central.
+      - 0–9: incidental or very weakly related; you should normally avoid
+        including such keywords.
+
+    General rules:
+      - All output fields must be strings.
+      - When a field is supposed to contain a list of structured keyword objects,
+        you must represent that list as a JSON-encoded string.
+      - Do not invent information that is not supported by the text.
+      - Avoid synonyms that refer to exactly the same concept; choose one
+        representative keyword instead.
+      - Prefer technical terms used in the article itself when they are
+        reasonably compact.
+      - Always provide macro_area and specific_area for every keyword object.
+
+    Global keyword fields and formats:
+
+      general_keywords_scored:
+        - JSON-encoded string.
+        - Inside that string, create a JSON array of objects.
+        - Each object must have:
+            "keyword"         : short phrase (1–3 words)
+            "relevance_score" : integer 0..100
+            "macro_area"      : broad discipline (string)
+            "specific_area"   : more specific field (string)
+        - Include 5–15 keywords.
+        - Sort the array in descending order of relevance_score.
+
+        Example value (as JSON-encoded string):
+          "[{\"keyword\": \"single-particle cryo-EM\",
+             \"relevance_score\": 95,
+             \"macro_area\": \"biological science\",
+             \"specific_area\": \"biomedical imaging\"},
+            {\"keyword\": \"conformational heterogeneity\",
+             \"relevance_score\": 88,
+             \"macro_area\": \"biological science\",
+             \"specific_area\": \"structural biology\"}]"
+
+      methods_keywords_scored:
+        - Same format as general_keywords_scored.
+        - Focus only on methods, experimental techniques, algorithms, or
+          analysis approaches.
+        - Include 3–10 keywords.
+        - Sort by relevance_score from highest to lowest.
+
+      results_keywords_scored:
+        - Same format as general_keywords_scored.
+        - Focus on main results, discovered properties, or key outcomes.
+        - Include 3–10 keywords.
+        - Sort by relevance_score from highest to lowest.
+
+    If the article clearly lacks a given category (for example, it has no
+    empirical results), you may still include a small set of very general
+    results keywords (for example "theoretical analysis") with moderate relevance
+    scores, or set the corresponding field to the JSON-encoded empty list "[]".
+
+    Required output keys (all as strings):
+
+      pdf_filename              : "N/A" (will be filled by the caller; you still must include the key)
+      general_keywords_scored   : JSON-encoded string as defined above
+      methods_keywords_scored   : JSON-encoded string as defined above
+      results_keywords_scored   : JSON-encoded string as defined above
+
+    Output:
+      - Return STRICTLY one flat JSON object with all the keys above.
+      - Do NOT include any other keys.
+      - Do NOT wrap the JSON object in backticks or extra text.
+
+# ----------------------------------------------------------------------
+# SECTION / PARAGRAPH-LEVEL KEYWORD ENRICHMENT
+# ----------------------------------------------------------------------
+section_enrichment:
+  system_prompt: |-
+    You analyse ONE SECTION (or paragraph) of a scientific article.
+
+    Input (from the user message):
+      - SECTION_INDEX : integer index of the section (for reference only)
+      - SECTION_TITLE : title of the section (may be empty)
+      - SECTION_TEXT  : text content of the section
+
+    Focus only on SECTION_TEXT for the scientific content.
+    Use SECTION_TITLE only as light context.
+    Do NOT assume information from other parts of the paper.
+
+    Task:
+      For THIS SECTION, extract:
+        - general keywords that describe the section’s content
+        - method-focused keywords (if any methods appear)
+        - result-focused keywords (if any results appear)
+
+      For every keyword, you must assign:
+        - a relevance score from 0 to 100 indicating how well that keyword
+          describes THIS SECTION;
+        - a disciplinary classification:
+            * macro_area    : broad discipline
+            * specific_area : more specific field or subdiscipline
+
+    Use the same conventions for macro_area and specific_area as in the
+    global_extraction instructions. If a section is clearly at the interface
+    of multiple areas, "interdisciplinary" is acceptable for macro_area, but
+    specific_area should still be as informative as possible.
+
+    Interpretation of the relevance score for SECTION-level keywords:
+      - 90–100: central concept of this section.
+      - 70–89: very important within this section.
+      - 40–69: relevant but not central.
+      - 10–39: weakly relevant; peripheral detail.
+      - 0–9: avoid including such keywords.
+
+    Output format:
+      Return a single JSON object with exactly these keys:
+
+        - section_general_keywords
+        - section_methods_keywords
+        - section_results_keywords
+
+    Semantics and formats:
+
+      section_general_keywords:
+        - JSON array of objects.
+        - Each object must have:
+            "keyword"         : short phrase (1–3 words)
+            "relevance_score" : integer 0..100
+            "macro_area"      : broad discipline (string)
+            "specific_area"   : more specific field (string)
+        - Include 3–12 keywords when possible.
+        - Sort from highest to lowest relevance_score.
+        - If the section is extremely short or uninformative, you may return
+          an empty array [].
+
+      section_methods_keywords:
+        - JSON array of objects with the same structure:
+            "keyword"         : short phrase (1–3 words)
+            "relevance_score" : integer 0..100
+            "macro_area"      : broad discipline (string)
+            "specific_area"   : more specific field (string)
+        - Only include keywords that correspond to methods, techniques,
+          algorithms, sample preparation steps, data acquisition, or analysis
+          procedures mentioned in SECTION_TEXT.
+        - Include 0–8 keywords.
+        - If no methods are present, return [] (empty array).
+
+      section_results_keywords:
+        - JSON array of objects with the same structure:
+            "keyword"         : short phrase (1–3 words)
+            "relevance_score" : integer 0..100
+            "macro_area"      : broad discipline (string)
+            "specific_area"   : more specific field (string)
+        - Only include keywords that correspond to results, discovered
+          properties, performance outcomes, or biological/physical
+          conclusions stated in this section.
+        - Include 0–8 keywords.
+        - If there are no results in this section, return [].
+
+    Additional rules:
+      - Do not copy entire sentences as keywords; keep them compact.
+      - Prefer terms and phrases explicitly used in SECTION_TEXT, unless
+        a very standard synonym is clearly more concise.
+      - Do not add explanatory commentary in the output.
+      - Avoid overlapping synonyms in the same list; merge them into one
+        representative keyword with an appropriate relevance_score.
+      - Always provide macro_area and specific_area for every keyword object.
+
+    Output:
+      - Return ONLY the JSON object with the three keys above.
+      - Do NOT wrap it in backticks or extra text.
+
