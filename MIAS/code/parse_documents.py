@@ -4,10 +4,16 @@
 parse_documents.py
 
 Pipeline per:
-  1) Parsare PDF con GROBID in JSON (docs-type=paper)
+  1) Parsare PDF con GROBID in JSON "grezzi" (docs-type=paper)
   2) Arricchire i JSON con annotazioni LLM:
        - livello documento (llm_enrichment)
        - livello sezione/paragrafo (section_enrichment)
+     salvando gli enrichment in file separati:
+       - <stem>_metadata.json        (solo enrichment)
+       - <stem>_keywords.xml         (albero di keywords)
+
+Inoltre crea un file di indice globale:
+  metadata_index.json
 
 Riusa le utility implementate in pdf_relevance_pipeline.py
 senza modificarle.
@@ -16,6 +22,7 @@ senza modificarle.
 import argparse
 import json
 import re
+import csv
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -33,8 +40,10 @@ from pdf_relevance_pipeline import (
     make_llm,
 )
 
+
 # Limite massimo di caratteri per sezione passati al modello
 MAX_SECTION_CHARS = 4000  # puoi ridurre/aumentare a piacere
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -51,7 +60,8 @@ def run_grobid_papers(
     max_pages: Optional[int] = None,
 ) -> None:
     """
-    Parsare tutti i PDF in pdf_dir con GROBID e scrivere un JSON per paper in out_json_dir.
+    Parsare tutti i PDF in pdf_dir con GROBID e scrivere un JSON "grezzo" per paper in out_json_dir.
+    (Nessun arricchimento LLM; solo estrazione GROBID + clean_metadata.)
     """
     out_json_dir.mkdir(parents=True, exist_ok=True)
     pdf_list = sorted(pdf_dir.glob("*.pdf"))
@@ -89,7 +99,7 @@ def run_grobid_papers(
             json.dumps(meta, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
-        _log(f"[GROBID] Salvato JSON: {json_path}")
+        _log(f"[GROBID] Salvato JSON grezzo: {json_path}")
 
 
 def _build_full_text(meta: Dict[str, Any]) -> str:
@@ -132,17 +142,176 @@ def _safe_json_from_llm(content: str, fallback: Dict[str, Any]) -> Dict[str, Any
         return dict(fallback)
 
 
+def _ensure_list(x: Any) -> List[Any]:
+    if isinstance(x, list):
+        return x
+    if x in (None, "", "N/A"):
+        return []
+    return [x]
+
+
+def _extract_keyword_records(value: Any) -> List[Dict[str, str]]:
+    """
+    Converte un valore di campo 'keywords' (vari formati) in una lista di
+    record con le chiavi:
+      - keyword
+      - relevance
+      - macro_area
+      - specific_area
+
+    Supporta:
+      - stringa JSON-encoded (lista di oggetti con keyword, relevance_score,
+        macro_area, specific_area)
+      - lista di tali oggetti
+      - stringhe semplici (separate da ; , | o newline), senza metadati
+    """
+    records: List[Dict[str, str]] = []
+
+    def _add(
+        kw: Any,
+        relevance: Any = "",
+        macro_area: Any = "",
+        specific_area: Any = "",
+    ) -> None:
+        kw_str = str(kw).strip()
+        if not kw_str:
+            return
+        rec: Dict[str, str] = {
+            "keyword": kw_str,
+            "relevance": str(relevance) if relevance is not None else "",
+            "macro_area": str(macro_area) if macro_area is not None else "",
+            "specific_area": str(specific_area) if specific_area is not None else "",
+        }
+        records.append(rec)
+
+    if value is None:
+        return records
+
+    # Se è stringa, provo prima a fare json.loads
+    if isinstance(value, str):
+        s = value.strip()
+        if not s:
+            return records
+        try:
+            parsed = json.loads(s)
+            value = parsed
+        except Exception:
+            # Non è JSON -> tratto come lista di keyword semplici
+            parts = re.split(r"[;,|\n]", s)
+            for p in parts:
+                p = p.strip()
+                if p:
+                    _add(p)
+            return records
+
+    # Se ho una lista, itero ricorsivamente
+    if isinstance(value, list):
+        for item in value:
+            records.extend(_extract_keyword_records(item))
+        return records
+
+    # Se è un singolo dict, provo ad estrarre i campi noti
+    if isinstance(value, dict):
+        kw = value.get("keyword") or value.get("term") or ""
+        relevance = value.get("relevance_score", value.get("relevance", ""))
+        macro_area = value.get("macro_area", "")
+        specific_area = value.get("specific_area", "")
+        _add(kw, relevance, macro_area, specific_area)
+        return records
+
+    # Fallback generico
+    _add(str(value))
+    return records
+
+
+def _extract_keywords_from_metadata(metadata: Dict[str, Any]) -> List[Dict[str, str]]:
+    """
+    Estrae tutti i record keyword/relevance/macro_area/specific_area dal
+    metadata JSON (<stem>_metadata.json), sia a livello documento che sezione.
+    """
+    all_records: List[Dict[str, str]] = []
+
+    # --- livello documento ---
+    llm_enr = metadata.get("llm_enrichment") or {}
+    if isinstance(llm_enr, dict):
+        for k, v in llm_enr.items():
+            if "keyword" not in k.lower():
+                continue
+            all_records.extend(_extract_keyword_records(v))
+
+    # --- livello sezione ---
+    sections = metadata.get("section_enrichment") or []
+    if isinstance(sections, list):
+        for sec in sections:
+            if not isinstance(sec, dict):
+                continue
+            for k, v in sec.items():
+                if "keyword" not in k.lower():
+                    continue
+                all_records.extend(_extract_keyword_records(v))
+
+    return all_records
+
+
+def _save_keywords_csv_from_metadata_json(
+    metadata_json_path: Path,
+    keywords_csv_path: Path,
+) -> None:
+    """
+    Carica <stem>_metadata.json, estrae keywords (con relevance/macro_area/
+    specific_area) e salva come CSV:
+
+      keyword,relevance,macro_area,specific_area
+      Gaussian functions,70,mathematics,statistics
+      image embedding,90,computer science,image processing
+      ...
+    """
+    try:
+        data = json.loads(metadata_json_path.read_text(encoding="utf-8"))
+    except Exception as e:
+        _log(f"[KEYWORDS][WARN] Impossibile leggere metadata JSON {metadata_json_path}: {e}")
+        return
+
+    records = _extract_keywords_from_metadata(data)
+
+    try:
+        with keywords_csv_path.open("w", encoding="utf-8", newline="") as f:
+            writer = csv.writer(f)
+            # header
+            writer.writerow(["keyword", "relevance", "macro_area", "specific_area"])
+            # righe
+            for rec in records:
+                writer.writerow(
+                    [
+                        rec.get("keyword", ""),
+                        rec.get("relevance", ""),
+                        rec.get("macro_area", ""),
+                        rec.get("specific_area", ""),
+                    ]
+                )
+        _log(f"[KEYWORDS] Salvato CSV keywords: {keywords_csv_path.name}")
+    except Exception as e:
+        _log(f"[KEYWORDS][WARN] Impossibile scrivere CSV {keywords_csv_path}: {e}")
+
+
+
 def enrich_json_documents(
     json_dir: Path,
     enrich_yaml: Path,
     relevance_threshold: int = 50,
+    raw_docs_dir: Optional[Path] = None,
 ) -> None:
     """
-    Arricchisce tutti i JSON in json_dir usando il profilo in enrich_yaml.
+    Arricchisce tutti i JSON grezzi in json_dir usando il profilo in enrich_yaml.
 
-    Aggiunge a ciascun JSON:
-      - 'llm_enrichment'      : enrichment a livello di articolo (un dict)
-      - 'section_enrichment'  : lista di enrichment per sezione/paragrafo
+    Invece di modificare il JSON originale, crea per ogni documento:
+
+      - <stem>_metadata.json : enrichment a livello di articolo + sezione
+      - <stem>_keywords.xml  : keywords estratte dal metadata_json
+
+    Inoltre crea un indice globale:
+
+      - metadata_index.json : lista di record con mapping dei file
     """
     if not json_dir.is_dir():
         raise SystemExit(f"[ERROR] JSON directory non trovata: {json_dir}")
@@ -150,7 +319,6 @@ def enrich_json_documents(
     if not enrich_yaml.is_file():
         raise SystemExit(f"[ERROR] File YAML per enrichment non trovato: {enrich_yaml}")
 
-    # YAML grezzo (ci serve per section_enrichment)
     raw_cfg = yaml.safe_load(enrich_yaml.read_text(encoding="utf-8"))
     if not isinstance(raw_cfg, dict):
         raise SystemExit("[ERROR] Il file YAML di enrichment deve essere un mapping.")
@@ -169,6 +337,18 @@ def enrich_json_documents(
     _log(f"[ENRICH] Numero di documenti da arricchire: {len(json_files)}")
 
     llm_for_sections = make_llm() if have_section_enrichment else None
+
+    # indice globale
+    index_records: List[Dict[str, Any]] = []
+
+    raw_dir_str = ""
+    if raw_docs_dir is not None:
+        # aggiungo trailing slash per coerenza con l'esempio
+        r = str(raw_docs_dir)
+        raw_dir_str = r if r.endswith("/") else r + "/"
+
+    meta_dir_str = str(json_dir)
+    meta_dir_str = meta_dir_str if meta_dir_str.endswith("/") else meta_dir_str + "/"
 
     for idx, json_path in enumerate(json_files, start=1):
         _log(f"[ENRICH] [{idx}/{len(json_files)}] {json_path.name}")
@@ -210,13 +390,10 @@ def enrich_json_documents(
             if k not in llm_enrichment:
                 llm_enrichment[k] = v
 
-        meta["llm_enrichment"] = llm_enrichment
-
         # --- Section / paragraph-level enrichment ---
-        # --- Section / paragraph-level enrichment ---
+        sec_records: List[Dict[str, Any]] = []
         if have_section_enrichment and llm_for_sections is not None:
             sections = meta.get("sections") or []
-            sec_records: List[Dict[str, Any]] = []
 
             for s_idx, sec in enumerate(sections):
                 sec_text = (sec.get("text") or "").strip()
@@ -224,10 +401,8 @@ def enrich_json_documents(
                 if not sec_text:
                     continue
 
-                # taglio la sezione per limitare i token
                 truncated_text = sec_text[:MAX_SECTION_CHARS]
 
-                # per velocità: nessun abstract, nessun pdf_filename, solo sezione
                 user_content = (
                     f"SECTION_INDEX: {s_idx}\n"
                     f"SECTION_TITLE: {sec_title or 'N/A'}\n\n"
@@ -262,13 +437,6 @@ def enrich_json_documents(
                     _log(f"[ENRICH][WARN] Section-level enrichment failed for {pdf_filename} sec {s_idx}: {e}")
                     sec_data = dict(fallback_section)
 
-                def _ensure_list(x: Any) -> List[Any]:
-                    if isinstance(x, list):
-                        return x
-                    if x in (None, "", "N/A"):
-                        return []
-                    return [x]
-
                 sec_data["section_secondary_questions"] = _ensure_list(
                     sec_data.get("section_secondary_questions")
                 )
@@ -287,15 +455,56 @@ def enrich_json_documents(
 
                 sec_records.append(rec)
 
-            meta["section_enrichment"] = sec_records
+        # --- Costruzione del record di metadata (enrichment) separato ---
+        metadata_record: Dict[str, Any] = {
+            "pdf_filename": pdf_filename,
+            "title": title,
+            "llm_enrichment": llm_enrichment,
+        }
+        if sec_records:
+            metadata_record["section_enrichment"] = sec_records
 
+        # path dei file di output per questo documento
+        stem = json_path.stem
+        raw_text_json_filename = f"{stem}.json"
+        metadata_json_filename = f"{stem}_metadata.json"
+        keywords_filename = f"{stem}_keywords.csv"
 
-        # --- Salvataggio ---
-        json_path.write_text(
-            json.dumps(meta, ensure_ascii=False, indent=2),
+        metadata_json_path = json_dir / metadata_json_filename
+        keywords_csv_path = json_dir / keywords_filename
+
+        # salva metadata JSON
+        metadata_json_path.write_text(
+            json.dumps(metadata_record, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
-        _log(f"[ENRICH] Salvato JSON arricchito: {json_path.name}")
+        _log(f"[ENRICH] Salvato JSON metadata: {metadata_json_path.name}")
+
+        # genera e salva CSV di keywords a partire dal metadata JSON
+        _save_keywords_csv_from_metadata_json(metadata_json_path, keywords_csv_path)
+
+        # aggiungi record all'indice globale
+        index_record = {
+            "raw_directory": raw_dir_str,
+            "metadataDirectory": meta_dir_str,
+            "raw_filename": pdf_filename,
+            "raw_text_json_filename": raw_text_json_filename,
+            "metadata_json_filename": metadata_json_filename,
+            "keywords_file": keywords_filename,
+        }
+
+        index_records.append(index_record)
+
+    # --- Salvataggio indice globale ---
+    if index_records:
+        index_path = json_dir / "metadata_index.json"
+        index_path.write_text(
+            json.dumps(index_records, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        _log(f"[INDEX] Salvato indice globale: {index_path}")
+    else:
+        _log("[INDEX] Nessun record di metadata generato; indice non creato.")
 
 
 # ---------------------------------------------------------------------------
@@ -304,7 +513,7 @@ def enrich_json_documents(
 
 def main() -> None:
     ap = argparse.ArgumentParser(
-        description="Parse PDF con GROBID e arricchisci i JSON con metadata LLM (documento + sezioni)."
+        description="Parse PDF con GROBID e arricchisci i JSON con metadata LLM (documento + sezioni) salvando i risultati in file separati."
     )
     ap.add_argument(
         "--docs-dir",
@@ -346,29 +555,33 @@ def main() -> None:
     if not docs_dir.is_dir():
         raise SystemExit(f"[ERROR] docs-dir non esiste o non è una directory: {docs_dir}")
 
-    # Decidi la directory JSON
+    # Decidi la directory JSON (metadataDirectory) e la raw_directory da mettere nell'indice
     if args.docs_type == "paper":
         if args.out_json_dir:
             json_dir = Path(args.out_json_dir)
         else:
             json_dir = docs_dir.parent / f"{docs_dir.name}_json"
 
+        # parsing GROBID -> JSON grezzi
         run_grobid_papers(
             pdf_dir=docs_dir,
             out_json_dir=json_dir,
             grobid_url=args.grobid_url,
             max_pages=None,
         )
+        raw_docs_dir = docs_dir
     else:
-        # docs-type = json: docs-dir contiene già i JSON
+        # docs-type = json: docs-dir contiene già i JSON grezzi
         json_dir = docs_dir
+        raw_docs_dir = docs_dir  # in questo caso raw_directory coincide con json_dir
 
-    # Enrichment opzionale
+    # Enrichment opzionale: genera <stem>_metadata.json, <stem]_keywords.xml e metadata_index.json
     if args.enrich_yaml:
         enrich_json_documents(
             json_dir=json_dir,
             enrich_yaml=Path(args.enrich_yaml),
             relevance_threshold=args.relevance_threshold,
+            raw_docs_dir=raw_docs_dir,
         )
     else:
         _log("[INFO] Nessun file YAML di enrichment specificato: parsing GROBID completato.")
