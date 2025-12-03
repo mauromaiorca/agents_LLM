@@ -152,18 +152,21 @@ def _ensure_list(x: Any) -> List[Any]:
 
 def _extract_keyword_records(value: Any) -> List[Dict[str, str]]:
     """
-    Converte un valore di campo 'keywords' (vari formati) in una lista di
-    record con le chiavi:
+    Convert a 'keywords' field (various formats) into a list of records with:
       - keyword
       - relevance
       - macro_area
       - specific_area
+      - scientific_role
+      - study_object
+      - research_question
 
-    Supporta:
-      - stringa JSON-encoded (lista di oggetti con keyword, relevance_score,
-        macro_area, specific_area)
-      - lista di tali oggetti
-      - stringhe semplici (separate da ; , | o newline), senza metadati
+    Supported input formats:
+      - JSON-encoded string: list of objects with keys like
+            keyword, relevance_score, macro_area, specific_area,
+            scientific_role, study_object, research_question
+      - list of such dicts
+      - plain strings (separated by ; , | or newline), without metadata
     """
     records: List[Dict[str, str]] = []
 
@@ -172,6 +175,9 @@ def _extract_keyword_records(value: Any) -> List[Dict[str, str]]:
         relevance: Any = "",
         macro_area: Any = "",
         specific_area: Any = "",
+        scientific_role: Any = "",
+        study_object: Any = "",
+        research_question: Any = "",
     ) -> None:
         kw_str = str(kw).strip()
         if not kw_str:
@@ -181,13 +187,16 @@ def _extract_keyword_records(value: Any) -> List[Dict[str, str]]:
             "relevance": str(relevance) if relevance is not None else "",
             "macro_area": str(macro_area) if macro_area is not None else "",
             "specific_area": str(specific_area) if specific_area is not None else "",
+            "scientific_role": str(scientific_role) if scientific_role is not None else "",
+            "study_object": str(study_object) if study_object is not None else "",
+            "research_question": str(research_question) if research_question is not None else "",
         }
         records.append(rec)
 
     if value is None:
         return records
 
-    # Se è stringa, provo prima a fare json.loads
+    # If it is a string, first try json.loads
     if isinstance(value, str):
         s = value.strip()
         if not s:
@@ -196,7 +205,7 @@ def _extract_keyword_records(value: Any) -> List[Dict[str, str]]:
             parsed = json.loads(s)
             value = parsed
         except Exception:
-            # Non è JSON -> tratto come lista di keyword semplici
+            # Not JSON -> treat as a list of simple keyword strings
             parts = re.split(r"[;,|\n]", s)
             for p in parts:
                 p = p.strip()
@@ -204,22 +213,33 @@ def _extract_keyword_records(value: Any) -> List[Dict[str, str]]:
                     _add(p)
             return records
 
-    # Se ho una lista, itero ricorsivamente
+    # If it is a list, recurse on each item
     if isinstance(value, list):
         for item in value:
             records.extend(_extract_keyword_records(item))
         return records
 
-    # Se è un singolo dict, provo ad estrarre i campi noti
+    # Single dict: extract all known fields
     if isinstance(value, dict):
         kw = value.get("keyword") or value.get("term") or ""
         relevance = value.get("relevance_score", value.get("relevance", ""))
         macro_area = value.get("macro_area", "")
         specific_area = value.get("specific_area", "")
-        _add(kw, relevance, macro_area, specific_area)
+        scientific_role = value.get("scientific_role", "")
+        study_object = value.get("study_object", "")
+        research_question = value.get("research_question", "")
+        _add(
+            kw,
+            relevance,
+            macro_area,
+            specific_area,
+            scientific_role,
+            study_object,
+            research_question,
+        )
         return records
 
-    # Fallback generico
+    # Generic fallback
     _add(str(value))
     return records
 
@@ -258,18 +278,18 @@ def _save_keywords_csv_from_metadata_json(
     keywords_csv_path: Path,
 ) -> None:
     """
-    Carica <stem>_metadata.json, estrae keywords (con relevance/macro_area/
-    specific_area) e salva come CSV:
+    Load <stem>_metadata.json, extract keywords (with relevance, discipline,
+    and semantic fields), and save as CSV:
 
-      keyword,relevance,macro_area,specific_area
-      Gaussian functions,70,mathematics,statistics
-      image embedding,90,computer science,image processing
+      keyword,relevance,macro_area,specific_area,scientific_role,study_object,research_question
+      Gaussian functions,70,mathematics,statistics,method,signals,resolution improvement
+      image embedding,90,computer science,image processing,method,images,feature extraction
       ...
     """
     try:
         data = json.loads(metadata_json_path.read_text(encoding="utf-8"))
     except Exception as e:
-        _log(f"[KEYWORDS][WARN] Impossibile leggere metadata JSON {metadata_json_path}: {e}")
+        _log(f"[KEYWORDS][WARN] Cannot read metadata JSON {metadata_json_path}: {e}")
         return
 
     records = _extract_keywords_from_metadata(data)
@@ -277,9 +297,19 @@ def _save_keywords_csv_from_metadata_json(
     try:
         with keywords_csv_path.open("w", encoding="utf-8", newline="") as f:
             writer = csv.writer(f)
-            # header
-            writer.writerow(["keyword", "relevance", "macro_area", "specific_area"])
-            # righe
+            # header with the new fields
+            writer.writerow(
+                [
+                    "keyword",
+                    "relevance",
+                    "macro_area",
+                    "specific_area",
+                    "scientific_role",
+                    "study_object",
+                    "research_question",
+                ]
+            )
+            # rows
             for rec in records:
                 writer.writerow(
                     [
@@ -287,12 +317,14 @@ def _save_keywords_csv_from_metadata_json(
                         rec.get("relevance", ""),
                         rec.get("macro_area", ""),
                         rec.get("specific_area", ""),
+                        rec.get("scientific_role", ""),
+                        rec.get("study_object", ""),
+                        rec.get("research_question", ""),
                     ]
                 )
-        _log(f"[KEYWORDS] Salvato CSV keywords: {keywords_csv_path.name}")
+        _log(f"[KEYWORDS] Saved CSV keywords: {keywords_csv_path.name}")
     except Exception as e:
-        _log(f"[KEYWORDS][WARN] Impossibile scrivere CSV {keywords_csv_path}: {e}")
-
+        _log(f"[KEYWORDS][WARN] Cannot write CSV {keywords_csv_path}: {e}")
 
 
 def enrich_json_documents(
