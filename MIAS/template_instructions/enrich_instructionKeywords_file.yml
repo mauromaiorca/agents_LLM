@@ -2,7 +2,9 @@ profile_name: scientific_article_keywords_only_with_disciplines
 description: >
   Profile for scientific research articles that extracts only global and
   section-level keywords, together with a relevance score and disciplinary
-  classification (macro_area and specific_area) for each keyword.
+  classification (macro_area and specific_area) for each keyword. Each keyword
+  also has a structured semantic characterisation in terms of its scientific
+  role, the object of study, and a short research question phrase.
 
 topic: >
   Scientific research articles in biology, biomedical imaging, technology
@@ -80,6 +82,44 @@ global_extraction:
       - a disciplinary classification:
           * macro_area    : broad discipline
           * specific_area : more specific field or subdiscipline
+      - a structured semantic characterisation:
+          * scientific_role : single word describing the functional role
+            of the concept in the article, for example:
+              - method
+              - application
+              - result
+              - theory
+              - dataset
+              - metric
+              - system
+              - background
+          * study_object    : one or two words describing the main physical,
+            biological, or conceptual entity the keyword refers to, for example:
+              - imaging
+              - structure
+              - dynamics
+              - cells
+              - tissues
+              - organelles
+              - proteins
+              - markets
+              - users
+          * research_question : up to three words (no punctuation) that
+            concisely describe the scientific question or problem that this
+            keyword is most closely connected to in the context of the article,
+            for example:
+              - "resolution improvement"
+              - "conformation discovery"
+              - "cellular context"
+              - "user behaviour modelling"
+
+    All three semantic fields are required for every keyword. Together they
+    capture the part–whole and analogy structure of the concept:
+      - scientific_role encodes what the concept is doing in the article
+        (for example method vs application vs result).
+      - study_object encodes what the concept is about (for example particles,
+        cells, tissues, structures, markets).
+      - research_question encodes why it is studied (the local question).
 
     Examples of macro_area:
       - "mathematics"
@@ -114,6 +154,38 @@ global_extraction:
     captures the most relevant combination (for example "biomedical imaging",
     "computational neuroscience", "health economics").
 
+    Constraints on semantic fields:
+      - scientific_role:
+          * single lower-case word.
+          * choose from a small controlled set when possible:
+            method, application, result, theory, dataset, metric, system,
+            background. If none fits, choose the closest descriptive role.
+      - study_object:
+          * one or two lower-case words.
+          * no punctuation.
+          * describe the main entity or process the keyword refers to, for
+            example "particles", "cells", "tissues", "membranes", "markets",
+            "customers", "networks", "proteins", "images".
+      - research_question:
+          * up to three lower-case words.
+          * no punctuation.
+          * describe the local scientific question this keyword contributes to
+            in the article (for example "resolution improvement",
+            "conformation discovery", "throughput increase",
+            "user segmentation", "treatment response").
+
+    Example of how two related methods should be differentiated:
+      - "single-particle cryo-EM":
+          scientific_role  : "method"
+          study_object     : "particles"
+          research_question: "structure determination"
+      - "in situ cryo-ET":
+          scientific_role  : "method"
+          study_object     : "cells"
+          research_question: "cellular context"
+      These two keywords share the same scientific_role, have related but
+      distinct study_object, and are connected to different research questions.
+
     Interpretation of the relevance score for GLOBAL (article-level) keywords:
       - 90–100: core concept, central to the article’s contribution.
       - 70–89: very important concept, appears repeatedly in a central role.
@@ -131,7 +203,8 @@ global_extraction:
         representative keyword instead.
       - Prefer technical terms used in the article itself when they are
         reasonably compact.
-      - Always provide macro_area and specific_area for every keyword object.
+      - Always provide macro_area, specific_area, scientific_role, study_object,
+        and research_question for every keyword object.
 
     Global keyword fields and formats:
 
@@ -139,10 +212,13 @@ global_extraction:
         - JSON-encoded string.
         - Inside that string, create a JSON array of objects.
         - Each object must have:
-            "keyword"         : short phrase (1–3 words)
-            "relevance_score" : integer 0..100
-            "macro_area"      : broad discipline (string)
-            "specific_area"   : more specific field (string)
+            "keyword"           : short phrase (1–3 words)
+            "relevance_score"   : integer 0..100
+            "macro_area"        : broad discipline (string)
+            "specific_area"     : more specific field (string)
+            "scientific_role"   : functional role (single word)
+            "study_object"      : entity or process (1–2 words)
+            "research_question" : up to three words, no punctuation
         - Include 5–15 keywords.
         - Sort the array in descending order of relevance_score.
 
@@ -150,11 +226,17 @@ global_extraction:
           "[{\"keyword\": \"single-particle cryo-EM\",
              \"relevance_score\": 95,
              \"macro_area\": \"biological science\",
-             \"specific_area\": \"biomedical imaging\"},
-            {\"keyword\": \"conformational heterogeneity\",
-             \"relevance_score\": 88,
+             \"specific_area\": \"structural biology\",
+             \"scientific_role\": \"method\",
+             \"study_object\": \"particles\",
+             \"research_question\": \"structure determination\"},
+            {\"keyword\": \"in situ cryo-ET\",
+             \"relevance_score\": 90,
              \"macro_area\": \"biological science\",
-             \"specific_area\": \"structural biology\"}]"
+             \"specific_area\": \"biomedical imaging\",
+             \"scientific_role\": \"method\",
+             \"study_object\": \"cells\",
+             \"research_question\": \"cellular context\"}]"
 
       methods_keywords_scored:
         - Same format as general_keywords_scored.
@@ -214,11 +296,36 @@ section_enrichment:
         - a disciplinary classification:
             * macro_area    : broad discipline
             * specific_area : more specific field or subdiscipline
+        - a structured semantic characterisation:
+            * scientific_role : single word describing the functional role
+              of the concept in THIS SECTION (for example method, application,
+              result, theory, dataset, metric, system, background)
+            * study_object    : one or two words describing the main physical,
+              biological, or conceptual entity this keyword refers to in THIS
+              SECTION (for example particles, cells, tissues, membranes,
+              markets, customers)
+            * research_question : up to three words (no punctuation) that
+              summarise the local scientific question addressed in THIS
+              SECTION that this keyword contributes to.
 
     Use the same conventions for macro_area and specific_area as in the
     global_extraction instructions. If a section is clearly at the interface
     of multiple areas, "interdisciplinary" is acceptable for macro_area, but
     specific_area should still be as informative as possible.
+
+    Constraints on semantic fields at section level:
+      - scientific_role:
+          * single lower-case word.
+          * choose from: method, application, result, theory, dataset,
+            metric, system, background whenever appropriate.
+      - study_object:
+          * one or two lower-case words.
+          * no punctuation.
+          * describe the relevant entity or process for THIS SECTION.
+      - research_question:
+          * up to three lower-case words.
+          * no punctuation.
+          * describe the local question or problem in THIS SECTION.
 
     Interpretation of the relevance score for SECTION-level keywords:
       - 90–100: central concept of this section.
@@ -239,10 +346,13 @@ section_enrichment:
       section_general_keywords:
         - JSON array of objects.
         - Each object must have:
-            "keyword"         : short phrase (1–3 words)
-            "relevance_score" : integer 0..100
-            "macro_area"      : broad discipline (string)
-            "specific_area"   : more specific field (string)
+            "keyword"           : short phrase (1–3 words)
+            "relevance_score"   : integer 0..100
+            "macro_area"        : broad discipline (string)
+            "specific_area"     : more specific field (string)
+            "scientific_role"   : functional role (single word)
+            "study_object"      : entity or process (1–2 words)
+            "research_question" : up to three words, no punctuation
         - Include 3–12 keywords when possible.
         - Sort from highest to lowest relevance_score.
         - If the section is extremely short or uninformative, you may return
@@ -250,10 +360,13 @@ section_enrichment:
 
       section_methods_keywords:
         - JSON array of objects with the same structure:
-            "keyword"         : short phrase (1–3 words)
-            "relevance_score" : integer 0..100
-            "macro_area"      : broad discipline (string)
-            "specific_area"   : more specific field (string)
+            "keyword"           : short phrase (1–3 words)
+            "relevance_score"   : integer 0..100
+            "macro_area"        : broad discipline (string)
+            "specific_area"     : more specific field (string)
+            "scientific_role"   : functional role (single word)
+            "study_object"      : entity or process (1–2 words)
+            "research_question" : up to three words, no punctuation
         - Only include keywords that correspond to methods, techniques,
           algorithms, sample preparation steps, data acquisition, or analysis
           procedures mentioned in SECTION_TEXT.
@@ -262,10 +375,13 @@ section_enrichment:
 
       section_results_keywords:
         - JSON array of objects with the same structure:
-            "keyword"         : short phrase (1–3 words)
-            "relevance_score" : integer 0..100
-            "macro_area"      : broad discipline (string)
-            "specific_area"   : more specific field (string)
+            "keyword"           : short phrase (1–3 words)
+            "relevance_score"   : integer 0..100
+            "macro_area"        : broad discipline (string)
+            "specific_area"     : more specific field (string)
+            "scientific_role"   : functional role (single word)
+            "study_object"      : entity or process (1–2 words)
+            "research_question" : up to three words, no punctuation
         - Only include keywords that correspond to results, discovered
           properties, performance outcomes, or biological/physical
           conclusions stated in this section.
@@ -279,9 +395,9 @@ section_enrichment:
       - Do not add explanatory commentary in the output.
       - Avoid overlapping synonyms in the same list; merge them into one
         representative keyword with an appropriate relevance_score.
-      - Always provide macro_area and specific_area for every keyword object.
+      - Always provide macro_area, specific_area, scientific_role, study_object,
+        and research_question for every keyword object.
 
     Output:
       - Return ONLY the JSON object with the three keys above.
       - Do NOT wrap it in backticks or extra text.
-
