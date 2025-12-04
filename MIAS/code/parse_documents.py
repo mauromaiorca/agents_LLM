@@ -39,6 +39,7 @@ from pdf_relevance_pipeline import (
     fill_na_with_rag,
     make_llm,
     OPENAI_MODEL,
+    read_pdf_text,
 )
 
 
@@ -101,6 +102,80 @@ def run_grobid_papers(
             encoding="utf-8",
         )
         _log(f"[GROBID] Salvato JSON grezzo: {json_path}")
+
+
+def run_plain_papers(
+    pdf_dir: Path,
+    out_json_dir: Path,
+    max_pages: Optional[int] = None,
+) -> None:
+    """
+    Parsare tutti i PDF in pdf_dir SENZA GROBID e scrivere un JSON "grezzo" per paper
+    in out_json_dir usando una semplice estrazione di testo da PDF.
+
+    Struttura del JSON per ogni PDF:
+
+      {
+        "pdf_filename": "<nome.pdf>",
+        "title": "",
+        "abstract": "",
+        "fulltext": "<testo completo>",
+        "sections": [
+          {
+            "id": "body",
+            "type": "body",
+            "n": "",
+            "title": "",
+            "text": "<testo completo>"
+          }
+        ]
+      }
+
+    Questo è compatibile con _build_full_text e con la logica di section_enrichment
+    (otterrai una singola "sezione" con il testo integrale).
+    """
+    out_json_dir.mkdir(parents=True, exist_ok=True)
+    pdf_list = sorted(pdf_dir.glob("*.pdf"))
+
+    _log(
+        f"[INFO] Parsing plain-text di {len(pdf_list)} PDF da "
+        f"{pdf_dir.name} verso {out_json_dir.name} (senza GROBID)."
+    )
+
+    for pdf_path in pdf_list:
+        try:
+            text = read_pdf_text(
+                path=pdf_path,
+                max_pages=max_pages,
+                use_ocr_fallback=True,
+                with_tables=True,
+            )
+        except Exception as e:
+            _log(f"[PLAIN][WARN] Impossibile leggere testo da {pdf_path.name}: {e}")
+            text = ""
+
+        meta: Dict[str, Any] = {
+            "pdf_filename": pdf_path.name,
+            "title": "",
+            "abstract": "",
+            "fulltext": text,
+            "sections": [
+                {
+                    "id": "body",
+                    "type": "body",
+                    "n": "",
+                    "title": "",
+                    "text": text,
+                }
+            ],
+        }
+
+        json_path = out_json_dir / (pdf_path.stem + ".json")
+        json_path.write_text(
+            json.dumps(meta, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        _log(f"[PLAIN] Salvato JSON grezzo (no GROBID): {json_path}")
 
 
 def _build_full_text(meta: Dict[str, Any]) -> str:
@@ -272,6 +347,7 @@ def _extract_keywords_from_metadata(metadata: Dict[str, Any]) -> List[Dict[str, 
                 all_records.extend(_extract_keyword_records(v))
 
     return all_records
+
 
 def _save_keywords_json_and_csv_from_metadata_json(
     metadata_json_path: Path,
@@ -853,6 +929,7 @@ def enrich_json_documents(
     else:
         _log("[INDEX] Nessun record di metadata generato; indice non creato.")
 
+
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
@@ -874,7 +951,8 @@ def main() -> None:
         default="paper",
         help=(
             "Tipo di documenti in --docs-dir. "
-            "'paper' = PDF da parsare con GROBID; 'json' = JSON già parsati."
+            "'paper' = PDF da parsare (GROBID se --grobid, altrimenti estrazione testuale); "
+            "'json' = JSON già parsati."
         ),
     )
     ap.add_argument(
@@ -914,7 +992,7 @@ def main() -> None:
         default=None,
         help=(
             "File YAML di profilo per l'arricchimento LLM (documento + sezione). "
-            "Se omesso, fa solo il parsing GROBID."
+            "Se omesso, fa solo il parsing dei documenti."
         ),
     )
     ap.add_argument(
@@ -952,6 +1030,14 @@ def main() -> None:
         help=(
             "Se i file di output (metadata + keywords richieste) esistono già, "
             "non ricalcola l'enrichment LLM."
+        ),
+    )
+    ap.add_argument(
+        "--grobid",
+        action="store_true",
+        help=(
+            "Se presente, usa GROBID per parsare i PDF (richiede server GROBID). "
+            "Se assente, usa una estrazione testuale standard da PDF."
         ),
     )
 
@@ -1025,15 +1111,28 @@ def main() -> None:
 
     # Decidi raw_docs_dir (per l'indice) e json_dir (directory con i JSON grezzi + metadata)
     if args.docs_type == "paper":
-        # parsing GROBID -> JSON grezzi in project_dir
-        run_grobid_papers(
-            pdf_dir=docs_dir,
-            out_json_dir=project_dir,
-            grobid_url=args.grobid_url,
-            max_pages=None,
-        )
+        # parsing -> JSON grezzi in project_dir
         raw_docs_dir = docs_dir
         json_dir = project_dir
+
+        if args.grobid:
+            _log("[INFO] Opzione --grobid attiva: uso GROBID per parsare i PDF.")
+            run_grobid_papers(
+                pdf_dir=docs_dir,
+                out_json_dir=project_dir,
+                grobid_url=args.grobid_url,
+                max_pages=None,
+            )
+        else:
+            _log(
+                "[INFO] Opzione --grobid NON attiva: uso estrazione testuale semplice "
+                "da PDF (senza GROBID)."
+            )
+            run_plain_papers(
+                pdf_dir=docs_dir,
+                out_json_dir=project_dir,
+                max_pages=None,
+            )
     else:
         # docs-type = json: copia i JSON grezzi in project_dir per uniformare la struttura
         raw_docs_dir = docs_dir
@@ -1058,9 +1157,9 @@ def main() -> None:
         )
     else:
         _log(
-            "[INFO] Nessun file YAML di enrichment specificato: parsing GROBID completato."
+            "[INFO] Nessun file YAML di enrichment specificato: parsing completato."
         )
+
 
 if __name__ == "__main__":
     main()
-
