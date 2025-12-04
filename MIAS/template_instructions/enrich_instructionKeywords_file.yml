@@ -16,6 +16,7 @@ topic: >
 # ----------------------------------------------------------------------
 schema_fields:
   - pdf_filename
+  - doi
   - relevance
   - relevance_percentage
   - general_keywords_scored
@@ -70,12 +71,38 @@ global_extraction:
       - TITLE     : article title
       - FULL_TEXT : full scientific text
 
-    Your task:
-      Extract a compact set of structured scientific concepts describing:
-        - the overall subject of the article (general concepts)
-        - methods and techniques (method concepts)
-        - findings and conclusions (result concepts)
+    Your task has two parts.
 
+      First, extract basic bibliographic and study-level information:
+
+        - author        : main authors, formatted as "Surname1, Name1; Surname2, Name2".
+        - year          : publication year (YYYY) if stated; otherwise "N/A".
+        - title         : article title from the text; if not present, use "N/A".
+        - journal       : journal or outlet name; "N/A" if not clearly stated.
+        - type of study : short label for the study type. Use one of:
+                          "method development", "application", "review",
+                          "simulation / modelling", "software / resource",
+                          "other", "N/A".
+        - doi           : canonical DOI string such as "10.1038/s41586-020-2649-2"
+                          if it appears in the text; otherwise "N/A".
+
+      Second, extract a compact set of structured scientific concepts describing:
+        - the overall subject of the article (general concepts),
+        - methods and techniques (method concepts),
+        - findings and conclusions (result concepts).
+
+      For all fields:
+        - never invent information that is not supported by the text.
+        - if a field is missing or ambiguous, return exactly "N/A".
+        - keep all outputs concise and machine-readable.
+
+      The rest of the instructions for macro_area, specific_area, scientific_role,
+      study_object, research_question, and the controlled vocabularies remain as in
+      your previous profile.
+
+      In addition, if a DOI is present in the article header, footer, or metadata,
+      you MUST extract the canonical DOI string (for example "10.1038/s41586-020-2649-2").
+      If you cannot identify any plausible DOI, return "N/A" for the DOI.
     ----------------------------------------------------------------------
     CONTROLLED ONTOLOGY FOR DISCIPLINES (MACRO / SPECIFIC AREA)
     ----------------------------------------------------------------------
@@ -288,15 +315,29 @@ global_extraction:
 
     Output FORMAT (STRICT):
       Return ONLY one flat JSON object with keys:
-        - pdf_filename              : string (can be "N/A")
-        - general_keywords_scored   : JSON-encoded string (array of objects)
-        - methods_keywords_scored   : JSON-encoded string (array of objects)
-        - results_keywords_scored   : JSON-encoded string (array of objects)
 
-      Each array contains objects with exactly the fields:
-        keyword, relevance_score, macro_area, specific_area,
-        scientific_role, study_object, research_question.
+        - pdf_filename            : string (can be "N/A")
+        - doi                     : string (canonical DOI or "N/A")
+        - author                  : string as described above
+        - year                    : string "YYYY" or "N/A"
+        - title                   : string article title
+        - journal                 : string journal/outlet name
+        - type of study           : one of the allowed tokens or "N/A"
 
+        - general_keywords_scored : array of objects
+        - methods_keywords_scored : array of objects
+        - results_keywords_scored : array of objects
+
+      Each element in general_keywords_scored, methods_keywords_scored, and
+      results_keywords_scored MUST be an object with exactly the fields:
+
+        - keyword
+        - relevance_score
+        - macro_area
+        - specific_area
+        - scientific_role
+        - study_object
+        - research_question
 # ----------------------------------------------------------------------
 # SECTION / PARAGRAPH-LEVEL KEYWORD ENRICHMENT
 # ----------------------------------------------------------------------
