@@ -95,7 +95,7 @@ code/run_pdf_relevance_pipeline.py --pdf-dir techAndMarketing_docs/ --config tem
 
 If you want to enrich json files of papers structured (using grobid), use this command:
 ```bash
-./code/parse_documents.py --docs-dir cryoEM_documents/  --enrich template_instructions/enrich_instructionKeywords_file.yml --out-json-dir cryoEM_enrichedKeywords_json/ --docs-type paper
+./code/parse_documents.py --docs-dir cryoEM_documents  --enrich template_instructions/enrich_instructionKeywords_file.yml --o cryoEM_documents_metadata --docs-type paper
 ```
 There are different template instructions you can use for this, for this you can use the "template_instructions/enrich_instruction_file.yml" to retrieve the research questions of all the paragraph, if you instead want to focus on the keywords only you can use "template_instructions/enrich_instructionKeywords_file.yml" that produces a detailed inspection on the keywords.
 
