@@ -114,7 +114,7 @@ where the cryoEM_documents_metadata.json is the file produced by parse_document 
 
 <img src="docs/images/gui_manual_selection.png" width="700"> 
 
-and you are able to select and export both subset of the documents (exported as json files) and a list of keywords, that can be used for selection.
+and you are able to select and export both subset of the documents (exported as json files) and a list of keywords, that can be used for selection. It is possible through the "text" folder to visualize the text of the paper for a rapid check.
 
 ## Optional third parts  
 
