@@ -110,9 +110,11 @@ For sorting the papers to be analysed, it is possible to do manual selection usi
 ```bash
 code/gui_manual_selection.py cryoEM_documents_metadata.json
 ```
-where the cryoEM_documents_metadata.json is the file produced by parse_document above.
+where the cryoEM_documents_metadata.json is the file produced by parse_document above. The main window, looks as the following
 
-<img src="docs/images/gui_manual_selection.png" width="600"> 
+<img src="docs/images/gui_manual_selection.png" width="700"> 
+
+and you are able to select and export both subset of the documents (exported as json files) and a list of keywords, that can be used for selection.
 
 ## Optional third parts  
 
