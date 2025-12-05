@@ -111,7 +111,8 @@ For sorting the papers to be analysed, it is possible to do manual selection usi
 code/gui_manual_selection.py cryoEM_documents_metadata.json
 ```
 where the cryoEM_documents_metadata.json is the file produced by parse_document above.
-<img src="docs/images/gui_manual_selection.png" width="300"> 
+
+<img src="docs/images/gui_manual_selection.png" width="600"> 
 
 ## Optional third parts  
 
