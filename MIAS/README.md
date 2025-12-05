@@ -105,8 +105,13 @@ code/run_pdf_relevance_pipeline.py --png-dir scontrini/ --config template_instru
 ```
 and you will get a csv with the receipts total amount: "analysis/scontrini_new.csv":
 
-
-
+## Manual selection  
+For sorting the papers to be analysed, it is possible to do manual selection using the provided GUI, through the command:
+```bash
+code/gui_manual_selection.py cryoEM_documents_metadata.json
+```
+where the cryoEM_documents_metadata.json is the file produced by parse_document above.
+<img src="docs/images/gui_manual_selection.png" width="300"> 
 
 ## Optional third parts  
 
