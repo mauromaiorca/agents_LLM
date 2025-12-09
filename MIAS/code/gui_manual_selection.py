@@ -44,7 +44,8 @@ You do not need to fix pyenv’s 3.11.9 just to run this GUI. Using the Homebrew
         self.base_dir = ""              # directory where the main JSON lives
         self.current_paper_index = None # index into self.papers
         self.displayed_paper_indices = []  # mapping Listbox row -> index in self.papers
-        
+        self.current_json_path = None   # full path of currently loaded JSON
+
         # CSV cache and modification tracking for per-paper keyword CSVs
         # path -> {"fieldnames": [...], "rows": [...]}
         self.csv_data = {}
@@ -89,35 +90,21 @@ You do not need to fix pyenv’s 3.11.9 just to run this GUI. Using the Homebrew
                               command=self.load_papers_json_dialog)
         btn_load.pack(anchor="w", pady=(0, 5))
 
+
         btn_save_papers = ttk.Button(left_frame, text="Save",
                                      command=self.save_paper_selection)
         btn_save_papers.pack(anchor="w", pady=(0, 5))
 
-        btn_export_docs = ttk.Button(left_frame, text="Export selected docs",
-                                     command=self.export_selected_docs)
-        btn_export_docs.pack(anchor="w", pady=(0, 5))
-
-        # Export keyword buttons (use these if you want a manual CSV)
-        btn_export_all = ttk.Button(
+        # Single export entry point
+        btn_export = ttk.Button(
             left_frame,
-            text="Export all keywords",
-            command=lambda: self.export_keywords(scope="all"),
+            text="Export...",
+            command=self.open_export_dialog,
         )
-        btn_export_all.pack(anchor="w", pady=(0, 2))
+        btn_export.pack(anchor="w", pady=(0, 5))
 
-        btn_export_global = ttk.Button(
-            left_frame,
-            text="Export global keywords",
-            command=lambda: self.export_keywords(scope="global"),
-        )
-        btn_export_global.pack(anchor="w", pady=(0, 2))
 
-        btn_export_specific = ttk.Button(
-            left_frame,
-            text="Export specific keywords",
-            command=lambda: self.export_keywords(scope="specific"),
-        )
-        btn_export_specific.pack(anchor="w", pady=(0, 5))
+
 
         # New button: run the LLM-based weighting pipeline
         btn_compute_weights = ttk.Button(
@@ -462,6 +449,7 @@ You do not need to fix pyenv’s 3.11.9 just to run this GUI. Using the Homebrew
 
         self.papers = data
         self.base_dir = os.path.dirname(json_path)
+        self.current_json_path = json_path
         self.current_paper_index = None
 
         self.csv_data.clear()
@@ -1243,22 +1231,31 @@ You do not need to fix pyenv’s 3.11.9 just to run this GUI. Using the Homebrew
     # -------------------------------------------------------------------------
 
     def save_paper_selection(self):
+        """
+        Save in-place:
+        - overwrite the currently loaded JSON file (self.current_json_path)
+        - write back any modified keyword CSVs
+        No file dialog is opened.
+        """
         if not self.papers:
             messagebox.showwarning("No data", "Load a papers JSON first.")
             return
 
+        if not self.current_json_path:
+            messagebox.showerror(
+                "Error",
+                "No source JSON file to overwrite. Use 'Load papers JSON...' first.",
+            )
+            return
+
+        # propagate _included back to 'selected'
         for paper in self.papers:
             included = bool(paper.get("_included", False))
             paper["selected"] = "True" if included else "False"
 
-        out_path = filedialog.asksaveasfilename(
-            title="Save updated papers JSON",
-            defaultextension=".json",
-            filetypes=[("JSON files", "*.json"), ("All files", "*.*")],
-        )
-        if not out_path:
-            return
+        out_path = self.current_json_path
 
+        # write JSON
         try:
             with open(out_path, "w", encoding="utf-8") as f:
                 json.dump(self.papers, f, indent=2, ensure_ascii=False)
@@ -1266,6 +1263,7 @@ You do not need to fix pyenv’s 3.11.9 just to run this GUI. Using the Homebrew
             messagebox.showerror("Error", f"Could not write JSON file:\n{e}")
             return
 
+        # write any modified per-paper keyword CSVs
         for path in list(self.modified_csvs):
             data = self.csv_data.get(path)
             if not data:
@@ -1292,8 +1290,134 @@ You do not need to fix pyenv’s 3.11.9 just to run this GUI. Using the Homebrew
             self.modified_csvs.discard(path)
 
         messagebox.showinfo(
-            "Saved", "Papers JSON and modified keyword CSVs have been saved."
+            "Saved",
+            f"Papers JSON and modified keyword CSVs have been saved to:\n{out_path}",
         )
+
+    def export_json_as(self):
+        """
+        Export the current papers JSON to a new file (Save As),
+        and write any modified keyword CSVs.
+        This is equivalent to the previous 'Save' behaviour.
+        """
+        if not self.papers:
+            messagebox.showwarning("No data", "Load a papers JSON first.")
+            return
+
+        # propagate _included back to 'selected'
+        for paper in self.papers:
+            included = bool(paper.get("_included", False))
+            paper["selected"] = "True" if included else "False"
+
+        out_path = filedialog.asksaveasfilename(
+            title="Export updated papers JSON",
+            defaultextension=".json",
+            filetypes=[("JSON files", "*.json"), ("All files", "*.*")],
+        )
+        if not out_path:
+            return
+
+        # write JSON
+        try:
+            with open(out_path, "w", encoding="utf-8") as f:
+                json.dump(self.papers, f, indent=2, ensure_ascii=False)
+        except Exception as e:
+            messagebox.showerror("Error", f"Could not write JSON file:\n{e}")
+            return
+
+        # write any modified per-paper keyword CSVs
+        for path in list(self.modified_csvs):
+            data = self.csv_data.get(path)
+            if not data:
+                continue
+
+            fieldnames = list(data["fieldnames"])
+            rows = data["rows"]
+
+            if "selected" not in fieldnames:
+                fieldnames.append("selected")
+            for r in rows:
+                if "selected" not in r:
+                    r["selected"] = "False"
+
+            try:
+                with open(path, "w", newline="", encoding="utf-8") as f:
+                    writer = csv.DictWriter(f, fieldnames=fieldnames)
+                    writer.writeheader()
+                    writer.writerows(rows)
+            except Exception as e:
+                messagebox.showerror("Error", f"Could not write CSV file {path}:\n{e}")
+                continue
+
+            self.modified_csvs.discard(path)
+
+        messagebox.showinfo(
+            "Exported",
+            f"Papers JSON and modified keyword CSVs have been exported to:\n{out_path}",
+        )
+
+    def open_export_dialog(self):
+        """
+        Open a modal export dialog with radio buttons:
+          - Export JSON (Save As)
+          - Export selected docs
+          - Export global keywords
+          - Export specific keywords
+        """
+        if not self.papers:
+            messagebox.showwarning("No data", "Load a papers JSON first.")
+            return
+
+        win = tk.Toplevel(self.root)
+        win.title("Export")
+        win.transient(self.root)
+        win.grab_set()  # make it modal
+
+        ttk.Label(win, text="Select what to export:").grid(
+            row=0, column=0, columnspan=2, sticky="w", padx=10, pady=(10, 5)
+        )
+
+        choice_var = tk.StringVar(value="json")
+
+        options = [
+            ("Export JSON (Save As)", "json"),
+            ("Export selected docs", "docs"),
+            ("Export global keywords", "global_kw"),
+            ("Export specific keywords", "specific_kw"),
+        ]
+
+        for i, (label, value) in enumerate(options, start=1):
+            ttk.Radiobutton(
+                win,
+                text=label,
+                variable=choice_var,
+                value=value,
+            ).grid(row=i, column=0, columnspan=2, sticky="w", padx=10, pady=2)
+
+        def do_export():
+            choice = choice_var.get()
+            if choice == "json":
+                self.export_json_as()
+            elif choice == "docs":
+                self.export_selected_docs()
+            elif choice == "global_kw":
+                self.export_keywords(scope="global")
+            elif choice == "specific_kw":
+                self.export_keywords(scope="specific")
+            win.destroy()
+
+        btn_export = ttk.Button(win, text="Export", command=do_export)
+        btn_export.grid(
+            row=len(options) + 1, column=0, sticky="e", padx=10, pady=(10, 10)
+        )
+
+        btn_cancel = ttk.Button(win, text="Cancel", command=win.destroy)
+        btn_cancel.grid(
+            row=len(options) + 1, column=1, sticky="w", padx=5, pady=(10, 10)
+        )
+
+        win.columnconfigure(0, weight=1)
+
 
     def export_selected_docs(self):
         if not self.papers:
