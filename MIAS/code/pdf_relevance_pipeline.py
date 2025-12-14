@@ -58,14 +58,12 @@ except Exception:
 
 import pandas as pd
 
-# ---- LangChain (old monolithic API) ----
-from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain.vectorstores import Chroma
-from langchain.embeddings import HuggingFaceEmbeddings
-from langchain.chat_models import ChatOpenAI
-from langchain.schema import SystemMessage, HumanMessage
-
-
+# ---- LangChain (v1.x split packages) ----
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langchain_chroma import Chroma
+from langchain_huggingface import HuggingFaceEmbeddings
+from langchain_openai import ChatOpenAI
+from langchain_core.messages import SystemMessage, HumanMessage
 # ----------------------------------------------------------------------
 # Profile loading (YAML)
 # ----------------------------------------------------------------------
@@ -1269,7 +1267,7 @@ def build_retriever_from_text(text: str, k: int = 8):
 
 def top_k_snippets_for_query(text: str, query: str, k: int = 8) -> str:
     retriever = build_retriever_from_text(text, k=k)
-    docs = retriever.get_relevant_documents(query)
+    docs = retriever.invoke(query)
     return "\n\n---\n\n".join((d.page_content or "")[:2000] for d in docs)
 
 
@@ -1286,9 +1284,7 @@ def score_relevance(topic: str, text: str, profile: Dict[str, Any]) -> Dict[str,
     llm = make_llm()
     sys_prompt = profile["relevance_prompt"]
     usr = f"TOPIC:\n{topic}\n\nCONTEXT:\n{ctx[:12000]}"
-    msg = llm(
-        [SystemMessage(content=sys_prompt), HumanMessage(content=usr)]
-    )
+    msg = llm.invoke([SystemMessage(content=sys_prompt), HumanMessage(content=usr)])
     content = getattr(msg, "content", "").strip()
     try:
         m = re.search(r"\{.*\}", content, flags=re.S)
@@ -1308,7 +1304,7 @@ def extract_global(title: str, text: str, profile: Dict[str, Any]) -> Dict[str, 
     llm = make_llm()
     sys_prompt = profile["global_extraction_prompt"]
     usr = f"KNOWN_TITLE: {title}\n\nCONTEXT:\n{text[:12000]}"
-    msg = llm(
+    msg = llm.invoke(
         [SystemMessage(content=sys_prompt), HumanMessage(content=usr)]
     )
     content = getattr(msg, "content", "").strip()
@@ -1335,7 +1331,7 @@ def ask_field(
     question: str,
     retriever,
 ) -> Dict[str, str]:
-    docs = retriever.get_relevant_documents(question)
+    docs = retriever.invoke(question)
     ctx = "\n\n---\n\n".join(d.page_content[:2000] for d in docs)
     llm = make_llm()
     sys = (
@@ -1347,7 +1343,7 @@ def ask_field(
         "- 'evidence' must be a short literal quote from the context (or empty if N/A)."
     )
     usr = f"FIELD: {field}\nINSTRUCTIONS:\n{question}\n\nCONTEXT:\n{ctx[:12000]}"
-    msg = llm(
+    msg = llm.invoke(
         [SystemMessage(content=sys), HumanMessage(content=usr)]
     )
     content = getattr(msg, "content", "").strip()
